@@ -1,0 +1,20 @@
+# 只跟踪 OTA 脚本；防止任何本地状态/凭据/产物误入库
+__pycache__/
+*.pyc
+_session/
+_inbox/
+_outbox/
+_engines/
+_backups/
+_outputs/
+_reports/
+_archive/
+_pw/
+_exe_runtime/
+dist/
+build/
+mail_config.json
+update_source.txt
+*.xlsx
+*.zip
+*.log
