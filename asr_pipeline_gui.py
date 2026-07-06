@@ -905,6 +905,18 @@ class GUI(QWidget):
             subprocess.Popen(["xdg-open", path])
 
     # ── 热更新（只同步小脚本，不重发大运行时）──
+    def _update_token(self):
+        """私有仓库鉴权 token：环境变量 ASR_UPDATE_TOKEN > 程序目录 update_token.txt。"""
+        t = os.environ.get("ASR_UPDATE_TOKEN", "").strip()
+        if not t:
+            tp = os.path.join(APP, "update_token.txt")
+            if os.path.exists(tp):
+                try:
+                    t = open(tp, encoding="utf-8").read().strip()
+                except Exception:
+                    t = ""
+        return t
+
     def check_update(self):
         src = os.environ.get("ASR_UPDATE_SOURCE", "").strip()
         if not src:
@@ -919,13 +931,16 @@ class GUI(QWidget):
                 self, "检查更新",
                 "未配置更新源。\n\n在程序目录建 update_source.txt，写入其一：\n"
                 "· 网络共享文件夹（如 \\\\服务器\\share\\asr_update）\n"
-                "· http(s) 更新包地址（.zip）\n\n"
+                "· http(s) 更新包地址（.zip）\n"
+                "· GitHub 私有库 zipball（配合 update_token.txt 只读 PAT）：\n"
+                "  https://api.github.com/repos/<账号>/<仓库>/zipball/main\n\n"
                 "更新源里放最新的 pipeline.py / web_download.py /\n"
                 "asr_pipeline_gui.py / version.txt 即可。")
             return
         self.append(f"[更新] 更新源：{src}\n")
         try:
-            updir = self._fetch_http_update(src) if src.lower().startswith("http") else src
+            token = self._update_token()
+            updir = self._fetch_http_update(src, token) if src.lower().startswith("http") else src
             if not updir or not os.path.isdir(updir):
                 QMessageBox.warning(self, "检查更新", "无法访问更新源，请检查路径/网络。")
                 return
@@ -952,13 +967,19 @@ class GUI(QWidget):
             self.append(f"[更新] 失败：{e}\n")
             QMessageBox.warning(self, "检查更新", f"更新失败：{e}")
 
-    def _fetch_http_update(self, url):
+    def _fetch_http_update(self, url, token=None):
         import tempfile, zipfile, urllib.request, shutil
         tmp = os.path.join(tempfile.gettempdir(), "_asr_update")
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp, exist_ok=True)
         zp = os.path.join(tmp, "update.zip")
-        urllib.request.urlretrieve(url, zp)
+        req = urllib.request.Request(url)
+        if token:                                   # 私有库鉴权（GitHub API zipball）
+            req.add_header("Authorization", "Bearer " + token)
+            req.add_header("Accept", "application/vnd.github+json")
+            req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        with urllib.request.urlopen(req, timeout=60) as r, open(zp, "wb") as f:
+            shutil.copyfileobj(r, f)
         with zipfile.ZipFile(zp) as z:
             z.extractall(tmp)
         os.remove(zp)
