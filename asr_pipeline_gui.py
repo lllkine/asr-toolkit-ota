@@ -505,7 +505,12 @@ class GUI(QWidget):
         self.btn_run = QPushButton("开始处理"); self.btn_run.setObjectName("cta")
         self.btn_run.clicked.connect(self.do_run)
         _iconize(self.btn_run, 0xE768, "#ffffff", 18)         # 播放
+        self.btn_resynth = QPushButton("重新合成"); self.btn_resynth.setObjectName("ghost")
+        self.btn_resynth.setToolTip("选一个语料文件或目录，强制重新生成 TTS 测试集（不受增量判断影响）")
+        self.btn_resynth.clicked.connect(self.do_resynth)
+        _iconize(self.btn_resynth, 0xE72C, "#4f46e5")         # 刷新
         c.actions.addWidget(self.btn_run)
+        c.actions.addWidget(self.btn_resynth)
         return c
 
     # ── 步骤3：传输 ──
@@ -915,6 +920,27 @@ class GUI(QWidget):
         args += ["--keep", str(self.keep.value())]
         args += self._filter_args()
         self.run(args)
+
+    def do_resynth(self):
+        """强制重新合成测试集：让用户选语料文件或目录 → pipeline resynth。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("重新合成测试集")
+        box.setText("选择要重新合成的对象：")
+        b_file = box.addButton("选语料文件", QMessageBox.AcceptRole)
+        b_dir = box.addButton("选语料目录", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is b_file:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "选择语料 xlsx", INBOX if os.path.isdir(INBOX) else APP, "Excel (*.xlsx)")
+        elif clicked is b_dir:
+            path = QFileDialog.getExistingDirectory(
+                self, "选择语料目录（可选某个 车厂/语种 目录）", APP)
+        else:
+            return
+        if path:
+            self.run(["resynth", "--path", path])
 
     def do_send(self):
         self.run(["send", "--receive", self.recv.text().strip() or "rdg,dtn"])

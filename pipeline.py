@@ -1021,6 +1021,44 @@ def step4_synthesize_incremental(incremental_dir: str) -> dict:
     return result
 
 
+def resynth(target: str) -> int:
+    """强制重新合成测试集：把指定语料文件/目录当作『新增』喂给合成逻辑，
+    不受增量判断影响。target 可为单个 .xlsx 或包含 .xlsx 的目录。"""
+    if not target or not os.path.exists(target):
+        print(f"✗ 路径不存在：{target}", flush=True)
+        return 2
+    if os.path.isfile(target):
+        files = [target] if target.endswith('.xlsx') and not os.path.basename(target).startswith('~$') else []
+    else:
+        files = sorted(os.path.join(r, f)
+                       for r, _, fs in os.walk(target)
+                       for f in fs
+                       if f.endswith('.xlsx') and not f.startswith('~$'))
+    if not files:
+        print(f"✗ 没找到可合成的 xlsx：{target}", flush=True)
+        return 2
+
+    # 搭一个临时“新增目录”，保留末级 车厂/语种 结构以帮助语种推断
+    stage = os.path.join(_ensure_dir(OUTPUTS_DIR),
+                         f"{INCREMENTAL_DIR_PREFIX}_manual_{RUN_TIMESTAMP}")
+    if os.path.exists(stage):
+        shutil.rmtree(stage, ignore_errors=True)
+    for f in files:
+        parts = os.path.normpath(os.path.abspath(f)).split(os.sep)
+        rel = os.sep.join(parts[-3:]) if len(parts) >= 3 else os.path.basename(f)
+        dst = os.path.join(stage, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(f, dst)
+
+    print(f"=== 重新合成测试集：{len(files)} 个语料（强制，忽略增量判断）===", flush=True)
+    res = step4_synthesize_incremental(stage)
+    shutil.rmtree(stage, ignore_errors=True)   # 清理临时暂存（产物在 tts_tools 下）
+    ok = len(res.get('ok', []))
+    print(f"=== 重新合成完成：成功 {ok}，跳过 {len(res.get('skipped', []))}，"
+          f"失败 {len(res.get('failed', []))} ===", flush=True)
+    return 0 if ok else 3
+
+
 # ══════════════════════════════════════════════════════
 # Step 5：打包 ZIP
 # ══════════════════════════════════════════════════════
@@ -1558,6 +1596,15 @@ if __name__ == "__main__":
                     if '--receive' in sys.argv else TRANSFER_RECEIVES)
             res = step9_transfer(send_files, recv)
             sys.exit(0 if res['sent'] and not res['failed'] else 1)
+        if cmd == 'resynth':
+            tgt = ''
+            if '--path' in sys.argv:
+                i = sys.argv.index('--path')
+                if i + 1 < len(sys.argv):
+                    tgt = sys.argv[i + 1]
+            elif len(sys.argv) > 2:
+                tgt = sys.argv[2]
+            sys.exit(resynth(tgt))
 
     # ── 初始化 _inbox/ ──────────────────────────────
     os.makedirs(INBOX_DIR, exist_ok=True)
