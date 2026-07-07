@@ -82,7 +82,7 @@ DEFAULT_SHEET = _endpoint("QQ_SHEET_URL")
 
 def _read_version(base) -> str:
     try:
-        with open(os.path.join(base, "version.txt"), encoding="utf-8") as f:
+        with open(os.path.join(base, "version.txt"), encoding="utf-8-sig") as f:
             return f.read().strip()
     except Exception:
         return "0"
@@ -936,7 +936,7 @@ class GUI(QWidget):
             tp = os.path.join(APP, "update_token.txt")
             if os.path.exists(tp):
                 try:
-                    t = open(tp, encoding="utf-8").read().strip()
+                    t = open(tp, encoding="utf-8-sig").read().strip()  # utf-8-sig 自动去 BOM
                 except Exception:
                     t = ""
         return t
@@ -947,7 +947,7 @@ class GUI(QWidget):
             sp = os.path.join(APP, "update_source.txt")
             if os.path.exists(sp):
                 try:
-                    src = open(sp, encoding="utf-8").read().strip()
+                    src = open(sp, encoding="utf-8-sig").read().strip()  # utf-8-sig 自动去 BOM
                 except Exception:
                     src = ""
         if not src:
