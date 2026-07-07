@@ -954,17 +954,23 @@ class GUI(QWidget):
             QMessageBox.information(
                 self, "检查更新",
                 "未配置更新源。\n\n在程序目录建 update_source.txt，写入其一：\n"
+                "· gitee raw 基地址（内网推荐）：\n"
+                "  https://gitee.com/<用户>/<仓库>/raw/main\n"
                 "· 网络共享文件夹（如 \\\\服务器\\share\\asr_update）\n"
-                "· http(s) 更新包地址（.zip）\n"
-                "· GitHub 私有库 zipball（配合 update_token.txt 只读 PAT）：\n"
-                "  https://api.github.com/repos/<账号>/<仓库>/zipball/main\n\n"
+                "· http(s) 更新包地址（.zip，如 GitHub 分支 zip）\n\n"
                 "更新源里放最新的 pipeline.py / web_download.py /\n"
                 "asr_pipeline_gui.py / version.txt 即可。")
             return
         self.append(f"[更新] 更新源：{src}\n")
         try:
             token = self._update_token()
-            updir = self._fetch_http_update(src, token) if src.lower().startswith("http") else src
+            if src.lower().startswith("http"):
+                if src.lower().rstrip("/").endswith(".zip") or "zipball" in src.lower():
+                    updir = self._fetch_http_update(src, token)      # zip 包（GitHub/内网服务器）
+                else:
+                    updir = self._fetch_raw_base(src, token)         # 逐文件（gitee raw 等）
+            else:
+                updir = src                                          # 本地/共享文件夹
             if not updir or not os.path.isdir(updir):
                 QMessageBox.warning(self, "检查更新", "无法访问更新源，请检查路径/网络。")
                 return
@@ -990,6 +996,33 @@ class GUI(QWidget):
         except Exception as e:
             self.append(f"[更新] 失败：{e}\n")
             QMessageBox.warning(self, "检查更新", f"更新失败：{e}")
+
+    def _fetch_raw_base(self, base, token=None):
+        """逐文件从 raw 基地址下载 UPDATE_FILES（gitee 等禁止匿名归档下载时用）。
+        base 形如 https://gitee.com/<用户>/<仓库>/raw/main 。"""
+        import tempfile, urllib.request, shutil
+        tmp = os.path.join(tempfile.gettempdir(), "_asr_update")
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp, exist_ok=True)
+        base = base.rstrip("/")
+        got_version = False
+        for rel in UPDATE_FILES:
+            url = base + "/" + rel.replace("\\", "/")
+            dst = os.path.join(tmp, rel)
+            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                if token:
+                    req.add_header("Authorization", "Bearer " + token)
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    data = r.read()
+                with open(dst, "wb") as f:
+                    f.write(data)
+                if rel == "version.txt":
+                    got_version = True
+            except Exception as e:
+                self.append(f"[更新] 跳过 {rel}：{e}\n")
+        return tmp if got_version else None
 
     def _fetch_http_update(self, url, token=None):
         import tempfile, zipfile, urllib.request, shutil
