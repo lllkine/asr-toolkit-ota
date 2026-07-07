@@ -42,7 +42,25 @@ INTERNAL_DIRS   = {INBOX_DIR, BACKUPS_DIR, OUTPUTS_DIR, REPORTS_DIR,
 # 打包/构建产物目录：不是语料，扫描时一律跳过
 BUILD_ARTIFACT_DIRS     = {'dist', 'build'}
 BUILD_ARTIFACT_PREFIXES = ('asr_pipeline_',)
-TTS_TOOLS_DIR   = r'D:\tts_tools'
+def _resolve_tts_tools_dir():
+    """定位 TTS 工具目录：环境变量 > 程序目录/tts_tools（打包/OTA 后在这）> D:\\tts_tools（开发机兜底）。"""
+    v = os.environ.get('TTS_TOOLS_DIR', '').strip()
+    if v:
+        return v
+    try:
+        base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) \
+            else os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        base = os.getcwd()
+    for cand in (os.path.join(base, 'tts_tools'),
+                 os.path.join(os.getcwd(), 'tts_tools'),
+                 r'D:\tts_tools'):
+        if os.path.isfile(os.path.join(cand, 'asr_tts_tool.py')):
+            return cand
+    return r'D:\tts_tools'
+
+
+TTS_TOOLS_DIR   = _resolve_tts_tools_dir()
 TTS_SAMPLE_SIZE = 1000
 TTS_CONCURRENCY = 10
 # ── rftctl 跨网段传输 ──────────────────────────────
@@ -218,7 +236,9 @@ def _is_shuofa_hard(name):     return any(kw in name for kw in SHUOFA_HARD_KEYWO
 def _is_shuofa_fallback(name): return any(kw in name for kw in SHUOFA_FALLBACK_KEYWORDS)
 def _is_shuofa(name):          return _is_shuofa_hard(name) or _is_shuofa_fallback(name)
 def _is_sent(name):            return any(kw in name for kw in SENT_KEYWORDS)
-def _normalize_brand(name):    return BRAND_ALIASES.get(str(name).strip(), str(name).strip())
+def _normalize_brand(name):
+    s = _cell_str(name)                       # 空/NaN → ''，不再变成 'nan'
+    return BRAND_ALIASES.get(s, s)
 
 def _sheet_is_meta(ws) -> bool:
     """
@@ -271,6 +291,17 @@ def _file_lang(name_no_ext: str) -> str:
     m = re.search(r'ASR-(.+)$', base)
     return m.group(1).lower() if m else ''
 
+def _cell_str(v) -> str:
+    """把单元格值转成字符串；空/NaN → ''（避免 pandas 的 NaN 变成字面 'nan'）。"""
+    try:
+        if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
+            return ''
+    except Exception:
+        pass
+    s = str(v).strip()
+    return '' if s.lower() == 'nan' else s
+
+
 def _build_mapping():
     """从排期.xlsx 构建完整映射列表。"""
     if not os.path.exists(SCHEDULE_FILE):
@@ -286,7 +317,7 @@ def _build_mapping():
         lm        = re.search(r'ASR-(.+)$', task_id)
         task_lang = lm.group(1).lower() if lm else ''
         brand     = _normalize_brand(row.iloc[1])
-        lang_dir  = str(row.iloc[2]).strip()
+        lang_dir  = _cell_str(row.iloc[2])          # 空单元格→''，不再变成 'nan'
         mapping.append((core_id, task_lang, brand, lang_dir, task_id))
     return mapping
 
@@ -626,7 +657,7 @@ def step1_organize(source_files: list, mapping: list) -> dict:
         entry, is_inferred = _find_mapping_entry_with_fallback(
             os.path.splitext(fname)[0], mapping)
 
-        if entry:
+        if entry and _cell_str(entry[2]) and _cell_str(entry[3]):
             _, _, brand, lang_dir, full_task_name = entry
             target_dir = os.path.join(brand, lang_dir)
             os.makedirs(target_dir, exist_ok=True)
@@ -1467,7 +1498,7 @@ def restore_from_backup(backup_dir: str = None):
             continue
         entry, _ = _find_mapping_entry_with_fallback(
             os.path.splitext(f)[0], mapping)
-        if entry:
+        if entry and _cell_str(entry[2]) and _cell_str(entry[3]):
             _, _, brand, lang_dir, full_task_name = entry
             target_dir = os.path.join(brand, lang_dir)
             os.makedirs(target_dir, exist_ok=True)

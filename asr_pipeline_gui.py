@@ -11,7 +11,7 @@ import html as _html
 from PySide6.QtCore import (Qt, QProcess, QProcessEnvironment, QPointF, QTimer,
                             QPropertyAnimation, QEasingCurve, QObject, QEvent)
 from PySide6.QtGui import (QFont, QTextCursor, QColor, QPixmap, QPainter,
-                           QPen, QPolygonF, QAction)
+                           QPen, QPolygonF, QAction, QPalette)
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton, QPlainTextEdit,
     QVBoxLayout, QHBoxLayout, QFrame, QCheckBox, QScrollArea, QComboBox,
@@ -125,10 +125,11 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: trans
 #muted   { color: #9aa3b8; font-size: 12.5px; }
 #fieldLbl { color: #475569; font-size: 12.5px; font-weight: 600; }
 
-QLineEdit { background: #f8fafc; border: 1px solid #dbe1ec; border-radius: 9px;
-            padding: 8px 11px; font-size: 13px; selection-background-color: #c7d2fe; }
-QLineEdit:focus { border: 1px solid #4f46e5; background: #ffffff; }
-QComboBox { background: #f8fafc; border: 1px solid #dbe1ec; border-radius: 9px;
+QLineEdit { background: #f8fafc; color: #1f2937; border: 1px solid #dbe1ec; border-radius: 9px;
+            padding: 8px 11px; font-size: 13px; selection-background-color: #c7d2fe;
+            selection-color: #1f2937; }
+QLineEdit:focus { border: 1px solid #4f46e5; background: #ffffff; color: #1f2937; }
+QComboBox { background: #f8fafc; color: #1f2937; border: 1px solid #dbe1ec; border-radius: 9px;
             padding: 7px 10px; font-size: 13px; }
 QComboBox:focus { border: 1px solid #4f46e5; }
 QComboBox::drop-down { border: none; width: 20px; }
@@ -1111,6 +1112,20 @@ def _check_icon() -> str:
 
 def main():
     app = QApplication(sys.argv)
+    # 强制浅色调色板，避免 Windows 深色模式把输入框文字变成白色（白底白字看不见）
+    app.setStyle("Fusion")
+    _pal = QPalette()
+    _pal.setColor(QPalette.Window, QColor("#f5f7fc"))
+    _pal.setColor(QPalette.WindowText, QColor("#1f2937"))
+    _pal.setColor(QPalette.Base, QColor("#ffffff"))
+    _pal.setColor(QPalette.AlternateBase, QColor("#f5f7fc"))
+    _pal.setColor(QPalette.Text, QColor("#1f2937"))
+    _pal.setColor(QPalette.Button, QColor("#f5f7fc"))
+    _pal.setColor(QPalette.ButtonText, QColor("#1f2937"))
+    _pal.setColor(QPalette.PlaceholderText, QColor("#9aa3b8"))
+    _pal.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+    _pal.setColor(QPalette.ToolTipText, QColor("#1f2937"))
+    app.setPalette(_pal)
     app.setStyleSheet(QSS.replace("__CHECK_ICON__", _check_icon()))
     app.setFont(QFont("Microsoft YaHei UI", 10))
     glow = HoverGlow(app)
