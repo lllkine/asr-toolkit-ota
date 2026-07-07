@@ -483,6 +483,8 @@ def main():
     ap.add_argument("--url", default=DEFAULT_DOC)
     ap.add_argument("--tab", default="")
     ap.add_argument("--user", default="", help="按责任人过滤")
+    ap.add_argument("--lang", default="", help="按语种过滤")
+    ap.add_argument("--brand", default="", help="按车厂过滤")
     ap.add_argument("--scope", default="all", choices=["all", "local", "cloud"])
     ap.add_argument("--download", action="store_true", help="下载命中的单号语料")
     ap.add_argument("--no-dedup", action="store_true",
@@ -507,6 +509,10 @@ def main():
         return 1
     if args.user:
         rows = [r for r in rows if args.user in r["责任人"] or args.user in r["备注"]]
+    if args.lang:
+        rows = [r for r in rows if args.lang in r["语种"]]
+    if args.brand:
+        rows = [r for r in rows if args.brand in r["车厂"]]
     # 云端/本地同名去重（在 scope 过滤前判定，本地同名存在与否以全集为准）
     if not args.no_dedup:
         rows, dup_skipped = dedup_cloud_local(rows)

@@ -1565,6 +1565,32 @@ if __name__ == "__main__":
     source_files = _collect_source_files()
     source_dir   = INBOX_DIR if source_files and source_files[0][0] == INBOX_DIR else '根目录'
     mapping      = _build_mapping()
+
+    # ── 语种/车厂筛选（--lang/--brand 或环境变量 FILTER_LANG/FILTER_BRAND；留空=全量）──
+    def _arg_val(flag):
+        if flag in sys.argv:
+            i = sys.argv.index(flag)
+            if i + 1 < len(sys.argv):
+                return sys.argv[i + 1]
+        return ''
+    _flt_lang  = (_arg_val('--lang')  or os.environ.get('FILTER_LANG', '')).strip()
+    _flt_brand = (_arg_val('--brand') or os.environ.get('FILTER_BRAND', '')).strip()
+    if _flt_lang or _flt_brand:
+        def _match_flt(sf):
+            entry, _ = _find_mapping_entry_with_fallback(os.path.splitext(sf[1])[0], mapping)
+            if not entry:
+                return False
+            b, l = _cell_str(entry[2]), _cell_str(entry[3])
+            if _flt_lang and _flt_lang not in l:
+                return False
+            if _flt_brand and _flt_brand not in b:
+                return False
+            return True
+        _before = len(source_files)
+        source_files = [sf for sf in source_files if _match_flt(sf)]
+        print(f"=== 筛选：语种[{_flt_lang or '不限'}] 车厂[{_flt_brand or '不限'}]："
+              f"{_before} -> {len(source_files)} 个文件 ===")
+
     stats        = {'run_ts': RUN_TIMESTAMP, 'source_dir': source_dir,
                     'source_count': len(source_files)}
 

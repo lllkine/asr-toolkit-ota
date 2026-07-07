@@ -183,11 +183,15 @@ def _pick(attaches):
     return None
 
 
-def download(base: str = RMP_BASE, scope: str = "all") -> int:
+def download(base: str = RMP_BASE, scope: str = "all",
+             lang: str = "", brand: str = "") -> int:
     """
     遍历列表(待处理)需求，下载语料到 _inbox，按单号命名。
     scope: all=全部 / local=只本地(-L-ASR) / cloud=只云端(-C-ASR)
+    lang/brand: 可选，只下载匹配语种/车厂的单（留空=不限）。
     """
+    lang = (lang or os.environ.get("FILTER_LANG", "")).strip()
+    brand = (brand or os.environ.get("FILTER_BRAND", "")).strip()
     from playwright.sync_api import sync_playwright
     if not os.path.exists(STATE):
         print("✗ 未找到登录会话，请先点“登录”。", flush=True)
@@ -276,8 +280,16 @@ def download(base: str = RMP_BASE, scope: str = "all") -> int:
             items = [it for it in items if "-L-ASR" in str(it.get("seqNo", ""))]
         elif scope == "cloud":
             items = [it for it in items if "-C-ASR" in str(it.get("seqNo", ""))]
+        # 语种/车厂筛选（留空=不限；语种取单号推断+languageName，车厂取搜索项）
+        if lang:
+            items = [it for it in items
+                     if lang in (_lang_cn(str(it.get("seqNo", ""))) or "")
+                     or lang in str(it.get("languageName") or "")]
+        if brand:
+            items = [it for it in items if brand in (_brand_of(it) or "")]
         scope_cn = {"local": "只本地", "cloud": "只云端"}.get(scope, "全部")
-        print(f"列表共 {total} 条，范围[{scope_cn}] 命中 {len(items)} 条，开始下载…", flush=True)
+        flt_cn = (f"，语种[{lang}]" if lang else "") + (f"，车厂[{brand}]" if brand else "")
+        print(f"列表共 {total} 条，范围[{scope_cn}]{flt_cn} 命中 {len(items)} 条，开始下载…", flush=True)
         ok = skip = fail = 0
         sched_rows = []
         for i, it in enumerate(items, 1):
@@ -340,12 +352,14 @@ def main():
     ap.add_argument("cmd", choices=["login", "download"])
     ap.add_argument("--base", default=RMP_BASE)
     ap.add_argument("--scope", default="all", choices=["all", "local", "cloud"])
+    ap.add_argument("--lang", default="")
+    ap.add_argument("--brand", default="")
     args = ap.parse_args()
     base = _origin(args.base)                 # 归一化到源站，容忍粘贴整页地址
     if args.cmd == "login":
         sys.exit(login(base))
     else:
-        sys.exit(download(base, args.scope))
+        sys.exit(download(base, args.scope, args.lang, args.brand))
 
 
 if __name__ == "__main__":

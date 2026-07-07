@@ -461,6 +461,20 @@ class GUI(QWidget):
             row2.addWidget(w, 1 if w is self.sheet_edit else 0)
         self.mid_add(c, row2)
 
+        # 语种/车厂 筛选（可选，作用于 下载 / 排期读取 / 处理）
+        rowf = QHBoxLayout(); rowf.setSpacing(9)
+        lblf = QLabel("筛选"); lblf.setObjectName("fieldLbl")
+        self.flt_lang = QLineEdit(); self.flt_lang.setFixedWidth(96)
+        self.flt_lang.setPlaceholderText("语种(可选)")
+        self.flt_lang.setFocusPolicy(Qt.ClickFocus)
+        self.flt_brand = QLineEdit(); self.flt_brand.setFixedWidth(90)
+        self.flt_brand.setPlaceholderText("车厂(可选)")
+        self.flt_brand.setFocusPolicy(Qt.ClickFocus)
+        hintf = QLabel("留空=全部；同时作用于 下载 / 排期 / 处理"); hintf.setObjectName("hint")
+        rowf.addWidget(lblf); rowf.addWidget(self.flt_lang); rowf.addWidget(self.flt_brand)
+        rowf.addWidget(hintf); rowf.addStretch(1)
+        self.mid_add(c, rowf)
+
         self.inbox_lbl = QLabel(""); self.inbox_lbl.setObjectName("muted")
         c.mid.addWidget(self.inbox_lbl)
 
@@ -814,10 +828,21 @@ class GUI(QWidget):
         self.append("提示：稍后会弹出浏览器，请登录后【关闭浏览器窗口】。\n")
         self.run(["login", "--base", base])
 
+    def _filter_args(self):
+        """把「筛选」里的 语种/车厂 拼成 --lang/--brand（留空则不加）。"""
+        args = []
+        lang = self.flt_lang.text().strip()
+        brand = self.flt_brand.text().strip()
+        if lang:
+            args += ["--lang", lang]
+        if brand:
+            args += ["--brand", brand]
+        return args
+
     def do_download(self):
         base = self.url_edit.text().strip() or DEFAULT_URL
         scope = {"全部": "all", "只本地": "local", "只云端": "cloud"}[self.scope.currentText()]
-        self.run(["download", "--base", base, "--scope", scope])
+        self.run(["download", "--base", base, "--scope", scope] + self._filter_args())
 
     def do_engine(self, action):
         lang = self.eng_lang.text().strip()
@@ -872,6 +897,7 @@ class GUI(QWidget):
             args += ["--user", user]
         scope = {"全部": "all", "只本地": "local", "只云端": "cloud"}[self.scope.currentText()]
         args += ["--scope", scope]
+        args += self._filter_args()
         if download:
             args.append("--download")
         self.run(args)
@@ -887,6 +913,7 @@ class GUI(QWidget):
         if self.auto_send.isChecked():
             args += ["--send", "--receive", self.recv.text().strip() or "rdg,dtn"]
         args += ["--keep", str(self.keep.value())]
+        args += self._filter_args()
         self.run(args)
 
     def do_send(self):
