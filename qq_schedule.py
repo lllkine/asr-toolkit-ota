@@ -509,10 +509,13 @@ def main():
         return 1
     if args.user:
         rows = [r for r in rows if args.user in r["责任人"] or args.user in r["备注"]]
+    def _fz(needle, *fields):
+        n = str(needle).lower().replace(" ", "")
+        return any(n in str(f or "").lower().replace(" ", "") for f in fields)
     if args.lang:
-        rows = [r for r in rows if args.lang in r["语种"]]
+        rows = [r for r in rows if _fz(args.lang, r["语种"], r["单号"])]
     if args.brand:
-        rows = [r for r in rows if args.brand in r["车厂"]]
+        rows = [r for r in rows if _fz(args.brand, r["车厂"])]
     # 云端/本地同名去重（在 scope 过滤前判定，本地同名存在与否以全集为准）
     if not args.no_dedup:
         rows, dup_skipped = dedup_cloud_local(rows)

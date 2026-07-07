@@ -280,13 +280,17 @@ def download(base: str = RMP_BASE, scope: str = "all",
             items = [it for it in items if "-L-ASR" in str(it.get("seqNo", ""))]
         elif scope == "cloud":
             items = [it for it in items if "-C-ASR" in str(it.get("seqNo", ""))]
-        # 语种/车厂筛选（留空=不限；语种取单号推断+languageName，车厂取搜索项）
+        # 语种/车厂筛选（留空=不限；模糊：大小写不敏感、含即命中）
+        def _fz(needle, *fields):
+            n = str(needle).lower().replace(" ", "")
+            return any(n in str(f or "").lower().replace(" ", "") for f in fields)
         if lang:
+            # 语种可用 中文名 / 单号(-ASR-代码) / languageName 任意片段匹配
             items = [it for it in items
-                     if lang in (_lang_cn(str(it.get("seqNo", ""))) or "")
-                     or lang in str(it.get("languageName") or "")]
+                     if _fz(lang, _lang_cn(str(it.get("seqNo", ""))),
+                            it.get("languageName"), it.get("seqNo"))]
         if brand:
-            items = [it for it in items if brand in (_brand_of(it) or "")]
+            items = [it for it in items if _fz(brand, _brand_of(it))]
         scope_cn = {"local": "只本地", "cloud": "只云端"}.get(scope, "全部")
         flt_cn = (f"，语种[{lang}]" if lang else "") + (f"，车厂[{brand}]" if brand else "")
         print(f"列表共 {total} 条，范围[{scope_cn}]{flt_cn} 命中 {len(items)} 条，开始下载…", flush=True)

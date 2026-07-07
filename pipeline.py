@@ -1576,14 +1576,19 @@ if __name__ == "__main__":
     _flt_lang  = (_arg_val('--lang')  or os.environ.get('FILTER_LANG', '')).strip()
     _flt_brand = (_arg_val('--brand') or os.environ.get('FILTER_BRAND', '')).strip()
     if _flt_lang or _flt_brand:
+        def _fz(needle, *fields):
+            n = str(needle).lower().replace(" ", "")
+            return any(n in str(f or "").lower().replace(" ", "") for f in fields)
+
         def _match_flt(sf):
             entry, _ = _find_mapping_entry_with_fallback(os.path.splitext(sf[1])[0], mapping)
             if not entry:
                 return False
             b, l = _cell_str(entry[2]), _cell_str(entry[3])
-            if _flt_lang and _flt_lang not in l:
+            # 语种可用 目录名 / 文件名(含单号-ASR-代码) 模糊匹配；大小写不敏感
+            if _flt_lang and not _fz(_flt_lang, l, sf[1]):
                 return False
-            if _flt_brand and _flt_brand not in b:
+            if _flt_brand and not _fz(_flt_brand, b):
                 return False
             return True
         _before = len(source_files)
