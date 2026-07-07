@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import argparse
+from urllib.parse import urlsplit
 
 
 def app_dir() -> str:
@@ -323,16 +324,28 @@ def download(base: str = RMP_BASE, scope: str = "all") -> int:
     return 0
 
 
+def _origin(url: str) -> str:
+    """把可能带 /offer-page/#/... 路径的整页地址归一化为源站 scheme://host。
+    这样用户在地址栏粘贴哪个页面 URL 都能用，避免拼接 API 时拼出畸形地址(→HTTP405)。"""
+    if not url:
+        return url
+    p = urlsplit(url.strip())
+    if p.scheme and p.netloc:
+        return f"{p.scheme}://{p.netloc}"
+    return url.strip().rstrip("/")
+
+
 def main():
     ap = argparse.ArgumentParser(description="RMP 语料下载")
     ap.add_argument("cmd", choices=["login", "download"])
     ap.add_argument("--base", default=RMP_BASE)
     ap.add_argument("--scope", default="all", choices=["all", "local", "cloud"])
     args = ap.parse_args()
+    base = _origin(args.base)                 # 归一化到源站，容忍粘贴整页地址
     if args.cmd == "login":
-        sys.exit(login(args.base))
+        sys.exit(login(base))
     else:
-        sys.exit(download(args.base, args.scope))
+        sys.exit(download(base, args.scope))
 
 
 if __name__ == "__main__":
