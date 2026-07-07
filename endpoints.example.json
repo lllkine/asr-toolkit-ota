@@ -1,0 +1,9 @@
+{
+  "_说明": "把本文件复制为 endpoints.json 并填入真实内网地址；endpoints.json 不入公开仓库。",
+  "RMP_BASE": "http://<你的RMP平台域名>",
+  "QQ_SHEET_URL": "https://docs.qq.com/sheet/<排期表ID>",
+  "XF_SHEET_URL": "https://<你的xfchat域名>/sheets/<引擎表ID>",
+  "DEVOPS_BASE": "http://<你的devops/制品库域名>",
+  "SMTP_HOST": "<你的SMTP服务器>",
+  "RFTCTL_PATH": ""
+}

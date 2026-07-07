@@ -5,10 +5,10 @@
   python send_mail.py test                    # 发一封测试邮件给自己
   python send_mail.py send --subject ... --body-file x.txt [--to a@x,b@x] [--attach f1,f2]
   python send_mail.py engine --lang 泰语 --brand 极氪   # 自动生成引擎上架通知并发送
-配置 mail_config.json：
-  { "smtp_host": "mail.iflytek.com", "smtp_port": 465, "use_ssl": true,
-    "user": "工号@iflytek.com", "password": "邮箱密码或授权码",
-    "from": "工号@iflytek.com", "to": ["a@iflytek.com"], "cc": [] }
+配置 mail_config.json（smtp_host 亦可放在同目录 endpoints.json 的 SMTP_HOST）：
+  { "smtp_host": "<你的SMTP服务器>", "smtp_port": 465, "use_ssl": true,
+    "user": "工号@example.com", "password": "邮箱密码或授权码",
+    "from": "工号@example.com", "to": ["a@example.com"], "cc": [] }
 """
 import os
 import sys
@@ -39,15 +39,39 @@ if APP not in sys.path:
     sys.path.insert(0, APP)
 CONFIG = os.path.join(APP, "mail_config.json")
 
+
+def _endpoint(key, default=""):
+    """内网地址：优先环境变量，其次同目录 endpoints.json；公开仓库不含真实地址。"""
+    import json as _json
+    v = os.environ.get(key, "").strip()
+    if v:
+        return v
+    try:
+        _base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+            else os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        _base = os.getcwd()
+    for _b in (_base, os.getcwd()):
+        try:
+            _p = os.path.join(_b, "endpoints.json")
+            if os.path.exists(_p):
+                _d = _json.load(open(_p, encoding="utf-8"))
+                if _d.get(key):
+                    return str(_d[key])
+        except Exception:
+            pass
+    return default
+
+
 TEMPLATE = {
-    "smtp_host": "mail.iflytek.com",
+    "smtp_host": _endpoint("SMTP_HOST", ""),
     "smtp_port": 465,
     "use_ssl": True,
-    "user": "你的工号邮箱@iflytek.com",
+    "user": "你的工号邮箱@example.com",
     "password": "邮箱密码或客户端授权码",
-    "from": "你的工号邮箱@iflytek.com",
+    "from": "你的工号邮箱@example.com",
     "from_name": "多语种识别",
-    "to": ["收件人1@iflytek.com"],
+    "to": ["收件人1@example.com"],
     "cc": [],
 }
 
@@ -77,9 +101,8 @@ def init_config() -> int:
 def send(subject: str, body: str, to=None, cc=None, attachments=None,
          html: bool = False) -> int:
     cfg = load_config()
-    need = [k for k in ("smtp_host", "user", "password", "from") if not cfg.get(k)]
-    if need or "@iflytek.com" not in str(cfg.get("user", "")) and "@" not in str(cfg.get("user", "")):
-        pass
+    if not cfg.get("smtp_host"):
+        cfg["smtp_host"] = _endpoint("SMTP_HOST", "")
     if not cfg or any(not cfg.get(k) or "你的" in str(cfg.get(k, ""))
                       for k in ("user", "password", "from")):
         print(f"✗ 请先配置 {CONFIG}（运行 send_mail.py init 生成模板并填写）。", flush=True)
@@ -107,7 +130,7 @@ def send(subject: str, body: str, to=None, cc=None, attachments=None,
                         filename=Header(os.path.basename(path), "utf-8").encode())
         msg.attach(part)
 
-    host = cfg.get("smtp_host", "mail.iflytek.com")
+    host = cfg.get("smtp_host") or _endpoint("SMTP_HOST", "")
     port = int(cfg.get("smtp_port", 465))
     print(f"连接 {host}:{port} …", flush=True)
     try:

@@ -35,9 +35,33 @@ if APP not in sys.path:          # runpy 运行时脚本目录不在 sys.path，
 INBOX = os.path.join(APP, "_inbox")
 SESSION_DIR = os.path.join(APP, "_session")
 STATE = os.path.join(SESSION_DIR, "storage_state.json")
-DEFAULT_DOC = os.environ.get(
-    "QQ_SHEET_URL", "https://docs.qq.com/sheet/DREF2QXVEb1FXdmhJ")
-RMP_BASE = os.environ.get("RMP_BASE", "http://rmp.iflytekauto.cn")
+
+
+def _endpoint(key, default=""):
+    """内网地址：优先环境变量，其次同目录 endpoints.json；公开仓库不含真实地址。"""
+    import json as _json
+    v = os.environ.get(key, "").strip()
+    if v:
+        return v
+    try:
+        _base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+            else os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        _base = os.getcwd()
+    for _b in (_base, os.getcwd()):
+        try:
+            _p = os.path.join(_b, "endpoints.json")
+            if os.path.exists(_p):
+                _d = _json.load(open(_p, encoding="utf-8"))
+                if _d.get(key):
+                    return str(_d[key])
+        except Exception:
+            pass
+    return default
+
+
+DEFAULT_DOC = _endpoint("QQ_SHEET_URL")
+RMP_BASE = _endpoint("RMP_BASE")
 
 LANG_SET = {"英语", "葡语", "葡萄牙语", "马来语", "泰语", "阿语", "俄语", "印地语",
             "印尼语", "越南语", "法语", "德语", "西班牙语", "西语", "日语", "韩语",

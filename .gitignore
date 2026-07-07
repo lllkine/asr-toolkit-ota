@@ -18,3 +18,4 @@ update_source.txt
 *.xlsx
 *.zip
 *.log
+endpoints.json

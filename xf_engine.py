@@ -40,11 +40,36 @@ XF_STATE = os.path.join(SESSION_DIR, "xf_state.json")
 DEVOPS_STATE = os.path.join(SESSION_DIR, "devops_state.json")
 DEVOPS_PROFILE = os.path.join(SESSION_DIR, "devops_profile")  # 持久化配置目录
 ENGINES_DIR = os.path.join(APP, "_engines")
-XF_URL = os.environ.get(
-    "XF_SHEET_URL",
-    "https://yf2ljykclb.xfchat.iflytek.com/sheets/shtrz8JhGfgIsWCvan1FRFHWZJe")
+
+
+def _endpoint(key, default=""):
+    """内网地址：优先环境变量，其次同目录 endpoints.json；公开仓库不含真实地址。"""
+    import json as _json
+    v = os.environ.get(key, "").strip()
+    if v:
+        return v
+    try:
+        _base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+            else os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        _base = os.getcwd()
+    for _b in (_base, os.getcwd()):
+        try:
+            _p = os.path.join(_b, "endpoints.json")
+            if os.path.exists(_p):
+                _d = _json.load(open(_p, encoding="utf-8"))
+                if _d.get(key):
+                    return str(_d[key])
+        except Exception:
+            pass
+    return default
+
+
+XF_URL = _endpoint("XF_SHEET_URL")
 DEFAULT_TAB = "本地多语种_听写"
-RFTCTL_DEFAULT = r'C:\Users\tyliu23\AppData\Local\Programs\rftctl\bin\rftctl.exe'
+DEVOPS_BASE = _endpoint("DEVOPS_BASE")                       # 如 http://<devops-host>
+DEVOPS_HOST = DEVOPS_BASE.split("://")[-1].split("/")[0]    # 提取主机名用于登录检测
+RFTCTL_DEFAULT = _endpoint("RFTCTL_PATH")
 
 
 def _find_rftctl() -> str:
@@ -101,7 +126,7 @@ def _devops_logged_in(url: str) -> bool:
     u = (url or "").lower()
     if "sso" in u or "login" in u or "cas" in u or "/auth" in u:
         return False
-    return "console.devops.iflytek.com" in u
+    return bool(DEVOPS_HOST) and DEVOPS_HOST in u
 
 
 def login_devops() -> int:
@@ -110,7 +135,7 @@ def login_devops() -> int:
     另开无头浏览器重放 storage_state 稳（SSO 会话票据不易丢）。"""
     from playwright.sync_api import sync_playwright
     os.makedirs(DEVOPS_PROFILE, exist_ok=True)
-    url = "http://console.devops.iflytek.com/ipackage"
+    url = DEVOPS_BASE + "/ipackage"
     print("正在打开浏览器…请登录 E3 平台（集团账号/扫码）。", flush=True)
     print("登录成功后工具会自动识别，届时你会看到「✓ 已检测到已登录」，再关闭窗口即可。", flush=True)
     detected = False
@@ -424,7 +449,7 @@ def download_local(rec: dict) -> int:
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         # 先探一下会话是否还在（SSO 票据可能已随浏览器关闭失效）
         try:
-            page.goto("http://console.devops.iflytek.com/ipackage",
+            page.goto(DEVOPS_BASE + "/ipackage",
                       wait_until="domcontentloaded", timeout=60000)
         except Exception:
             pass
@@ -458,7 +483,7 @@ def login_and_download(picked: list) -> int:
             no_viewport=True, args=["--start-maximized"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
-            page.goto("http://console.devops.iflytek.com/ipackage",
+            page.goto(DEVOPS_BASE + "/ipackage",
                       wait_until="domcontentloaded", timeout=60000)
         except Exception:
             pass

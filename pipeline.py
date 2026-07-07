@@ -46,7 +46,30 @@ TTS_TOOLS_DIR   = r'D:\tts_tools'
 TTS_SAMPLE_SIZE = 1000
 TTS_CONCURRENCY = 10
 # ── rftctl 跨网段传输 ──────────────────────────────
-RFTCTL_PATH_DEFAULT = r'C:\Users\tyliu23\AppData\Local\Programs\rftctl\bin\rftctl.exe'
+def _endpoint(key, default=""):
+    """内网地址/路径：优先环境变量，其次同目录 endpoints.json；公开仓库不含真实值。"""
+    import json as _json
+    v = os.environ.get(key, "").strip()
+    if v:
+        return v
+    try:
+        _base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+            else os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        _base = os.getcwd()
+    for _b in (_base, os.getcwd()):
+        try:
+            _p = os.path.join(_b, "endpoints.json")
+            if os.path.exists(_p):
+                _d = _json.load(open(_p, encoding="utf-8"))
+                if _d.get(key):
+                    return str(_d[key])
+        except Exception:
+            pass
+    return default
+
+
+RFTCTL_PATH_DEFAULT = _endpoint("RFTCTL_PATH", "")
 # 接收网段，逗号分隔可多发（默认同时发 rdg 和 dtn）
 TRANSFER_RECEIVES   = os.environ.get('RFT_RECEIVE', 'rdg,dtn')
 TODAY_TIMESTAMP = datetime.now().strftime('%Y%m%d')

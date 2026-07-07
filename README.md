@@ -35,3 +35,11 @@ https://github.com/<你的账号>/<仓库名>/archive/refs/heads/main.zip
 | `version.txt` | 版本号（OTA 比对依据） |
 
 > 说明：`send_mail.py` 里的邮箱/密码均为占位示例，真实凭据只存在于各用户本地的 `mail_config.json`，不随本仓库分发。
+
+## 内网地址配置（endpoints.json）
+
+脚本里**不含任何内网地址**（RMP / 排期表 / 引擎表 / 制品库 / SMTP 等），统一从程序目录的
+`endpoints.json` 读取。本仓库只提供占位模板 `endpoints.example.json`，真实的
+`endpoints.json` 由发布方打进 exe、并被 `.gitignore` 挡在仓库之外，OTA 也不会覆盖它
+（不在更新清单内）。内网用户拿到的 exe 已内置该文件，开箱即用；二次开发者复制
+`endpoints.example.json` 为 `endpoints.json` 填入真实地址即可。

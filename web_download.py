@@ -3,8 +3,9 @@
 需求管理平台 (RMP) 语料下载：
   python web_download.py login              # 弹浏览器手动登录一次，保存会话
   python web_download.py download           # 一键下载列表(待处理)全部语料到 _inbox
-  python web_download.py download --base http://rmp.iflytekauto.cn
+  python web_download.py download --base <RMP_BASE>
 规则：每个需求优先下【资源汇总】，没有则【逆规整后】，按单号(seqNo)命名。
+内网地址配置在同目录 endpoints.json（参见 endpoints.example.json）。
 """
 import os
 import re
@@ -29,7 +30,31 @@ SESSION_DIR = os.path.join(APP, "_session")
 STATE = os.path.join(SESSION_DIR, "storage_state.json")
 INBOX = os.path.join(APP, "_inbox")
 
-RMP_BASE = os.environ.get("RMP_BASE", "http://rmp.iflytekauto.cn")
+
+def _endpoint(key, default=""):
+    """内网地址：优先环境变量，其次同目录 endpoints.json；公开仓库不含真实地址。"""
+    import json as _json
+    v = os.environ.get(key, "").strip()
+    if v:
+        return v
+    try:
+        _base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+            else os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        _base = os.getcwd()
+    for _b in (_base, os.getcwd()):
+        try:
+            _p = os.path.join(_b, "endpoints.json")
+            if os.path.exists(_p):
+                _d = _json.load(open(_p, encoding="utf-8"))
+                if _d.get(key):
+                    return str(_d[key])
+        except Exception:
+            pass
+    return default
+
+
+RMP_BASE = _endpoint("RMP_BASE")
 LIST_PATH = "/offer-page/#/requirement"
 SEARCH_API = "/rmp/v2/bug/requirement/search"
 ATTACH_API = "/rmp/v2/bug/requirement/comment/getAttachList"
