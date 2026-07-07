@@ -302,6 +302,23 @@ def _cell_str(v) -> str:
     return '' if s.lower() == 'nan' else s
 
 
+_NON_BRAND_HINT = re.compile(r'产品|任务|需求|项目|版本|语助|多语种|测试集?|采集|话术|模型|逆规整')
+
+
+def _is_reliable_brand(v) -> bool:
+    """车厂是否可靠：非空、无逗号(不像拼接的需求名)、不含需求名特征词、且不过长。"""
+    b = _cell_str(v)
+    if not b:
+        return False
+    if ',' in b or '，' in b or '、' in b:      # 含逗号顿号 → 多半是拼接的需求名
+        return False
+    if _NON_BRAND_HINT.search(b):               # 含"产品/需求/多语种"等 → 需求名而非车厂
+        return False
+    if len(b) > 8:                              # 车厂名一般很短；过长多半是需求名
+        return False
+    return True
+
+
 def _build_mapping():
     """从排期.xlsx 构建完整映射列表。"""
     if not os.path.exists(SCHEDULE_FILE):
@@ -657,7 +674,7 @@ def step1_organize(source_files: list, mapping: list) -> dict:
         entry, is_inferred = _find_mapping_entry_with_fallback(
             os.path.splitext(fname)[0], mapping)
 
-        if entry and _cell_str(entry[2]) and _cell_str(entry[3]):
+        if entry and _is_reliable_brand(entry[2]) and _cell_str(entry[3]):
             _, _, brand, lang_dir, full_task_name = entry
             target_dir = os.path.join(brand, lang_dir)
             os.makedirs(target_dir, exist_ok=True)
@@ -681,11 +698,17 @@ def step1_organize(source_files: list, mapping: list) -> dict:
                 stats['moved'] += 1
                 stats['moved_paths'].append(dest)
         else:
+            reason = "排期未匹配"
+            if entry:
+                if not _cell_str(entry[3]):
+                    reason = "排期缺语种"
+                elif not _is_reliable_brand(entry[2]):
+                    reason = f"车厂不可靠({_cell_str(entry[2])[:12] or '空'})"
             misc = os.path.join('待确认', os.path.splitext(fname)[0])
             os.makedirs(misc, exist_ok=True)
             dest = _unique_path(os.path.join(misc, fname))
             shutil.move(src, dest)
-            print(f"  [未匹配] {fname}  ->  待确认/")
+            print(f"  [待确认] {fname}  ->  待确认/  ({reason}，请在排期补录后重跑)")
             stats['unmatched'].append(fname)
             stats['unmatched_paths'].append(dest)
 
@@ -1536,7 +1559,7 @@ def restore_from_backup(backup_dir: str = None):
             continue
         entry, _ = _find_mapping_entry_with_fallback(
             os.path.splitext(f)[0], mapping)
-        if entry and _cell_str(entry[2]) and _cell_str(entry[3]):
+        if entry and _is_reliable_brand(entry[2]) and _cell_str(entry[3]):
             _, _, brand, lang_dir, full_task_name = entry
             target_dir = os.path.join(brand, lang_dir)
             os.makedirs(target_dir, exist_ok=True)
