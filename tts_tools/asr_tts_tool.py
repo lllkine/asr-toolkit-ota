@@ -7,8 +7,11 @@ import subprocess
 import argparse
 import random
 import json
-import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
+try:                       # tkinter 仅本工具自带 GUI 用；打包成 PySide6 exe 时可能没带全，
+    import tkinter as tk   # 缺失也不能影响 --cli 合成与被 import 读配置。
+    from tkinter import filedialog, ttk, messagebox
+except Exception:
+    tk = ttk = filedialog = messagebox = None
 import edge_tts
 
 if hasattr(sys.stdout, "reconfigure"):
