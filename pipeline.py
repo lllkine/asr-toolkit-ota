@@ -337,7 +337,9 @@ def _cell_str(v) -> str:
     return '' if s.lower() == 'nan' else s
 
 
-_NON_BRAND_HINT = re.compile(r'产品|任务|需求|项目|版本|语助|多语种|测试集?|采集|话术|模型|逆规整')
+_NON_BRAND_HINT = re.compile(
+    r'产品|任务|需求|项目|版本|语助|多语种|测试集?|采集|话术|模型|逆规整|'
+    r'车载|语音|方案|平台|交付|演示|助手|座舱|识别|合成|唤醒|整体')
 
 
 def _is_reliable_brand(v) -> bool:
@@ -349,8 +351,8 @@ def _is_reliable_brand(v) -> bool:
         return False
     if _NON_BRAND_HINT.search(b):               # 含"产品/需求/多语种"等 → 需求名而非车厂
         return False
-    if len(b) > 8:                              # 车厂名一般很短；过长多半是需求名
-        return False
+    if len(b) > 16:                             # 兜底：极长多半是拼接的需求名（合法车厂全称如
+        return False                            # "比亚迪汽车有限公司" 仍放行；真正垃圾靠逗号/特征词拦）
     return True
 
 
@@ -889,7 +891,7 @@ def _extract_sent_lines(path: str) -> list:
     finally:
         wb.close()
 
-def step4_synthesize_incremental(incremental_dir: str) -> dict:
+def step4_synthesize_incremental(incremental_dir: str, skip_dedup: bool = False) -> dict:
     """
     对本次新增目录中的 Excel 自动合成测试集。
     每个 Excel 最多随机取 1000 条 _sent，不足则全取；测试集目录按文件名命名。
@@ -955,7 +957,7 @@ def step4_synthesize_incremental(incremental_dir: str) -> dict:
     for p in excel_files:
         name = os.path.basename(p)
         dup = False
-        if '-C-ASR' in name:
+        if not skip_dedup and '-C-ASR' in name:
             if _norm_lc(p) in _locals:
                 dup = True
             elif name.startswith('NS-'):
@@ -1108,8 +1110,8 @@ def resynth(target: str) -> int:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(f, dst)
 
-    print(f"=== 重新合成测试集：{len(files)} 个语料（强制，忽略增量判断）===", flush=True)
-    res = step4_synthesize_incremental(stage)
+    print(f"=== 重新合成测试集：{len(files)} 个语料（强制，忽略增量判断/去重）===", flush=True)
+    res = step4_synthesize_incremental(stage, skip_dedup=True)
     shutil.rmtree(stage, ignore_errors=True)   # 清理临时暂存（产物在 tts_tools 下）
     ok = len(res.get('ok', []))
     print(f"=== 重新合成完成：成功 {ok}，跳过 {len(res.get('skipped', []))}，"

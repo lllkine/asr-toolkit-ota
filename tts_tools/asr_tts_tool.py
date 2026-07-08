@@ -514,6 +514,10 @@ def main():
         except KeyboardInterrupt:
             print("\n[WARN] Aborted by user.")
     else:
+        if tk is None:      # 打包成无 tkinter 的 exe 时，无参启动没有图形界面
+            print("[ERROR] 本环境未包含 tkinter 图形库，无法打开界面。"
+                  "请用命令行 --cli 模式，或通过主程序调用。")
+            sys.exit(1)
         root = tk.Tk()
         App(root)
         root.mainloop()

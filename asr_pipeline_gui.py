@@ -1059,8 +1059,11 @@ class GUI(QWidget):
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp, exist_ok=True)
         base = base.rstrip("/")
-        got_version = False
-        for rel in UPDATE_FILES:
+        failed = []
+        # version.txt 放最后下：其余文件都齐了才写版本，避免"部分更新却顶了版本号"
+        order = [f for f in UPDATE_FILES if f != "version.txt"] + \
+                [f for f in UPDATE_FILES if f == "version.txt"]
+        for rel in order:
             url = base + "/" + rel.replace("\\", "/")
             dst = os.path.join(tmp, rel)
             os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
@@ -1072,11 +1075,14 @@ class GUI(QWidget):
                     data = r.read()
                 with open(dst, "wb") as f:
                     f.write(data)
-                if rel == "version.txt":
-                    got_version = True
             except Exception as e:
-                self.append(f"[更新] 跳过 {rel}：{e}\n")
-        return tmp if got_version else None
+                failed.append(rel)
+                self.append(f"[更新] 下载失败 {rel}：{e}\n")
+        if failed:
+            # 原子性：任一文件失败就不更新（否则代码没换、版本却被顶，下次判"已最新"卡死）
+            self.append(f"[更新] {len(failed)} 个文件下载失败，本次不更新，请重试。\n")
+            return None
+        return tmp
 
     def _fetch_http_update(self, url, token=None):
         import tempfile, zipfile, urllib.request, shutil

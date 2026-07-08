@@ -507,22 +507,23 @@ def main():
     if not rows:
         print("✗ 没解析到任何行（tab 可能不是排期格式，或文档无法访问）", flush=True)
         return 1
-    if args.user:
-        rows = [r for r in rows if args.user in r["责任人"] or args.user in r["备注"]]
-    def _fz(needle, *fields):
-        n = str(needle).lower().replace(" ", "")
-        return any(n in str(f or "").lower().replace(" ", "") for f in fields)
-    if args.lang:
-        rows = [r for r in rows if _fz(args.lang, r["语种"], r["单号"])]
-    if args.brand:
-        rows = [r for r in rows if _fz(args.brand, r["车厂"])]
-    # 云端/本地同名去重（在 scope 过滤前判定，本地同名存在与否以全集为准）
+    # 云端/本地同名去重（先于任何过滤，本地同名存在与否必须以全集为准，
+    # 否则责任人/语种/车厂过滤先删掉本地孪生 → 云端单不再被去重）
     if not args.no_dedup:
         rows, dup_skipped = dedup_cloud_local(rows)
         if dup_skipped:
             print(f"\n云端/本地同名去重：跳过 {len(dup_skipped)} 个云端单（本地已有同名）：", flush=True)
             for s in dup_skipped:
                 print(f"  · {s}", flush=True)
+    def _fz(needle, *fields):
+        n = str(needle).lower().replace(" ", "")
+        return any(n in str(f or "").lower().replace(" ", "") for f in fields)
+    if args.user:
+        rows = [r for r in rows if args.user in r["责任人"] or args.user in r["备注"]]
+    if args.lang:
+        rows = [r for r in rows if _fz(args.lang, r["语种"], r["单号"])]
+    if args.brand:
+        rows = [r for r in rows if _fz(args.brand, r["车厂"])]
     if args.scope == "local":
         rows = [r for r in rows if "-L-" in r["单号"]]
     elif args.scope == "cloud":
