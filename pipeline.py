@@ -227,6 +227,18 @@ DIR_TTS_LANGS = {
     '斯洛文尼亚语': 'si_si',
 }
 
+# 语种代码 → 中文名（用于筛选时 中文↔代码 互认；文件名后缀是代码，用户常填中文）
+LANG_CN = {
+    'ar_il': '阿语', 'de': '德语', 'fr_fr': '法语', 'he_il': '希伯来语',
+    'pt_la': '葡语', 'pt_pt': '葡萄牙语', 'th_th': '泰语', 'da_dk': '丹麦语',
+    'nb_no': '挪威语', 'sv_se': '瑞典语', 'nl_nl': '荷兰语', 'hu': '匈牙利语',
+    'ru': '俄语', 'si_si': '斯洛文尼亚语', 'vi_vn': '越南语', 'ko_kr': '韩语',
+    'en': '英语', 'en_uk': '英语', 'en_au': '英语', 'en_ml': '英语',
+    'ja': '日语', 'es_la': '西班牙语', 'es_es': '西班牙语', 'it_it': '意大利语',
+    'pl_pl': '波兰语', 'tr_tr': '土耳其语', 'fa_ir': '波斯语', 'hi_in': '印地语',
+    'id_id': '印尼语', 'ms_my': '马来语',
+}
+
 
 # ══════════════════════════════════════════════════════
 # 内部工具
@@ -290,6 +302,11 @@ def _file_lang(name_no_ext: str) -> str:
     base = re.sub(TIMESTAMP_REGEX, '', name_no_ext)
     m = re.search(r'ASR-(.+)$', base)
     return m.group(1).lower() if m else ''
+
+
+def _lang_cn_of(name: str) -> str:
+    """从文件名/单号的 -ASR-代码 反查中文语种名（en→英语）；无则空。"""
+    return LANG_CN.get(_file_lang(os.path.splitext(os.path.basename(name))[0]), '')
 
 def _cell_str(v) -> str:
     """把单元格值转成字符串；空/NaN → ''（避免 pandas 的 NaN 变成字面 'nan'）。"""
@@ -1650,21 +1667,35 @@ if __name__ == "__main__":
             n = str(needle).lower().replace(" ", "")
             return any(n in str(f or "").lower().replace(" ", "") for f in fields)
 
-        def _match_flt(sf):
+        def _flt_fields(sf):
             entry, _ = _find_mapping_entry_with_fallback(os.path.splitext(sf[1])[0], mapping)
-            if not entry:
+            b = _cell_str(entry[2]) if entry else ''
+            l = _cell_str(entry[3]) if entry else ''
+            return b, l
+
+        def _match_flt(sf):
+            b, l = _flt_fields(sf)
+            # 语种：排期目录名 / 文件名代码 / 文件名代码反查的中文名（en→英语）都参与匹配
+            if _flt_lang and not _fz(_flt_lang, l, sf[1], _lang_cn_of(sf[1])):
                 return False
-            b, l = _cell_str(entry[2]), _cell_str(entry[3])
-            # 语种可用 目录名 / 文件名(含单号-ASR-代码) 模糊匹配；大小写不敏感
-            if _flt_lang and not _fz(_flt_lang, l, sf[1]):
-                return False
+            # 车厂：只能靠排期（文件名里没有车厂信息）
             if _flt_brand and not _fz(_flt_brand, b):
                 return False
             return True
         _before = len(source_files)
-        source_files = [sf for sf in source_files if _match_flt(sf)]
+        _kept = [sf for sf in source_files if _match_flt(sf)]
         print(f"=== 筛选：语种[{_flt_lang or '不限'}] 车厂[{_flt_brand or '不限'}]："
-              f"{_before} -> {len(source_files)} 个文件 ===")
+              f"{_before} -> {len(_kept)} 个文件 ===")
+        if _before and not _kept:
+            print("  [筛选] 没有匹配的文件。各文件的 排期车厂 / 排期语种 / 文件名语种：")
+            for sf in source_files[:25]:
+                b, l = _flt_fields(sf)
+                print(f"    {sf[1]}  车厂={b or '(空)'}  语种={l or '(空)'}  "
+                      f"文件名语种={_lang_cn_of(sf[1]) or '?'}")
+            print("  [筛选] 提示：车厂只能按排期匹配——若排期里车厂为空/写的是需求名，"
+                  "请先在排期表补录正确车厂；或去掉车厂只按语种筛。")
+            sys.exit(0)
+        source_files = _kept
 
     stats        = {'run_ts': RUN_TIMESTAMP, 'source_dir': source_dir,
                     'source_count': len(source_files)}
