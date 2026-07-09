@@ -137,6 +137,53 @@ def update_schedule(rows: list) -> int:
         return 0
 
 
+def upsert_schedule(rows: list) -> tuple:
+    """把 (单号,车厂,语种,预计完成) 更新进排期表：已存在则用文档的【非空】车厂/语种覆盖，
+    不存在则追加（用于「刷新排期」——以腾讯文档为准）。返回 (更新数, 新增数)。"""
+    if not rows:
+        return (0, 0)
+    try:
+        from openpyxl import load_workbook, Workbook
+        if os.path.exists(SCHEDULE):
+            wb = load_workbook(SCHEDULE)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.append(["母任务", "车厂", "语种", "预计完成时间"])
+        idx = {}
+        for i, r in enumerate(ws.iter_rows(min_row=2, max_col=1, values_only=True), start=2):
+            if r[0]:
+                idx[str(r[0]).strip()] = i
+        updated = added = 0
+        for seq, brand, lang, deadline in rows:
+            seq = str(seq or "").strip()
+            if not seq:
+                continue
+            if seq in idx:
+                ri = idx[seq]
+                changed = False
+                if str(brand or "").strip() and \
+                        str(ws.cell(ri, 2).value or "").strip() != str(brand).strip():
+                    ws.cell(ri, 2).value = brand
+                    changed = True
+                if str(lang or "").strip() and \
+                        str(ws.cell(ri, 3).value or "").strip() != str(lang).strip():
+                    ws.cell(ri, 3).value = lang
+                    changed = True
+                if changed:
+                    updated += 1
+            else:
+                ws.append([seq, brand, lang, deadline])
+                idx[seq] = ws.max_row
+                added += 1
+        wb.save(SCHEDULE)
+        return (updated, added)
+    except Exception as e:
+        print(f"  [排期] 刷新失败：{e}", flush=True)
+        return (0, 0)
+
+
 def login(base: str = RMP_BASE) -> int:
     """弹出浏览器，用户手动登录，会话持久化到 storage_state.json。完成后关闭窗口即可。"""
     from playwright.sync_api import sync_playwright

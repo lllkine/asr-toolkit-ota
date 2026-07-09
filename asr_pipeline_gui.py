@@ -456,8 +456,13 @@ class GUI(QWidget):
         self.btn_sheet_dl = QPushButton("按排期下载"); self.btn_sheet_dl.setObjectName("primary")
         self.btn_sheet_dl.clicked.connect(lambda: self.do_sheet(True))
         _iconize(self.btn_sheet_dl, 0xE896, "#ffffff")
+        self.btn_sheet_sync = QPushButton("刷新排期"); self.btn_sheet_sync.setObjectName("ghost")
+        self.btn_sheet_sync.setToolTip("从腾讯文档最新需求单拉取，覆盖更新本地排期表的车厂/语种（文档为准）")
+        self.btn_sheet_sync.clicked.connect(self.do_sync_schedule)
+        _iconize(self.btn_sheet_sync, 0xE72C, "#4f46e5")      # 刷新
         for w in (lbl2, self.sheet_edit, lbl3, self.tab_combo, self.btn_tabs_refresh,
-                  lbl4, self.user_edit, self.btn_sheet_view, self.btn_sheet_dl):
+                  lbl4, self.user_edit, self.btn_sheet_view, self.btn_sheet_dl,
+                  self.btn_sheet_sync):
             row2.addWidget(w, 1 if w is self.sheet_edit else 0)
         self.mid_add(c, row2)
 
@@ -809,7 +814,7 @@ class GUI(QWidget):
 
     def set_running(self, running, code=None):
         for b in (self.btn_run, self.btn_login, self.btn_dl, self.btn_send,
-                  self.btn_sheet_view, self.btn_sheet_dl,
+                  self.btn_sheet_view, self.btn_sheet_dl, self.btn_sheet_sync,
                   self.btn_mail_prev, self.btn_mail_send):
             b.setEnabled(not running)
         self.btn_stop.setEnabled(running)
@@ -885,6 +890,14 @@ class GUI(QWidget):
                                   f"确认发送「{brand}{lang}」引擎上架邮件？\n"
                                   "（收件人在 mail_config.json 配置）") != QMessageBox.Yes:
             return
+        self.run(args)
+
+    def do_sync_schedule(self):
+        """从腾讯文档最新需求单刷新本地排期表的车厂/语种。"""
+        args = ["sheet", "sync", "--url", self.sheet_edit.text().strip() or DEFAULT_SHEET]
+        tab = self.tab_combo.currentText().strip()
+        if tab and tab != "（默认tab）":
+            args += ["--tab", tab]
         self.run(args)
 
     def refresh_tabs(self):

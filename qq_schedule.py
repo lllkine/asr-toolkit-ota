@@ -477,9 +477,21 @@ def download_seqnos(seqnos: list, base: str = RMP_BASE) -> dict:
 
 # ══════════════════════ 主入口 ══════════════════════
 
+def _latest_demand_tab(tabs) -> str:
+    """从 tabs [(id,name,hidden)] 里挑最新的『YYYY-MM…需求单』tab 的 id。"""
+    best = None
+    for i, n, _h in tabs:
+        m = re.search(r'(\d{4})\D+0?(\d{1,2}).*需求单', str(n))
+        if m:
+            key = (int(m.group(1)), int(m.group(2)))
+            if best is None or key > best[0]:
+                best = (key, i, n)
+    return best[1] if best else ""
+
+
 def main():
     ap = argparse.ArgumentParser(description="腾讯排期表读取/下载")
-    ap.add_argument("cmd", choices=["tabs", "read"])
+    ap.add_argument("cmd", choices=["tabs", "read", "sync"])
     ap.add_argument("--url", default=DEFAULT_DOC)
     ap.add_argument("--tab", default="")
     ap.add_argument("--user", default="", help="按责任人过滤")
@@ -502,6 +514,31 @@ def main():
             print(f"  {i}  {n}", flush=True)
         print(f"（另有 {len(hid)} 个隐藏 tab）", flush=True)
         return 0
+
+    if args.cmd == "sync":
+        # 「刷新排期」：从文档最新需求单 tab 拉取，覆盖更新本地 排期.xlsx 的车厂/语种
+        tab = args.tab or _latest_demand_tab(doc["tabs"])
+        if not tab:
+            print("✗ 找不到需求单 tab（可用 --tab 指定）", flush=True)
+            return 1
+        tname = next((n for i, n, _h in doc["tabs"] if i == tab), tab)
+        print(f"从文档刷新排期：tab = {tname}", flush=True)
+        sdoc = fetch_doc(args.url, tab)
+        srows = parse_rows(sdoc["cells"])
+        if not srows:
+            print("✗ 该 tab 没解析到排期行。", flush=True)
+            return 1
+        recs = [(r["单号"], r["车厂"], r["语种"], r.get("预计完成时间", ""))
+                for r in srows if r.get("单号")]
+        try:
+            import web_download as wd
+            upd, add = wd.upsert_schedule(recs)
+            print(f"✓ 刷新完成：更新 {upd} 行，新增 {add} 行（车厂/语种以文档为准）"
+                  f"  ->  排期.xlsx", flush=True)
+            return 0
+        except Exception as e:
+            print(f"✗ 写排期失败：{e}", flush=True)
+            return 1
 
     rows = parse_rows(doc["cells"])
     if not rows:
