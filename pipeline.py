@@ -373,6 +373,18 @@ def _build_mapping():
         brand     = _normalize_brand(row.iloc[1])
         lang_dir  = _cell_str(row.iloc[2])          # 空单元格→''，不再变成 'nan'
         mapping.append((core_id, task_lang, brand, lang_dir, task_id))
+
+    # 同一母任务编号(core)的车厂一致（与语种无关）：某行车厂空/不可靠时，
+    # 从同编号有可靠车厂的行继承，避免"英语行没填车厂"这类导致误进待确认。
+    brand_by_core = {}
+    for core, _tl, br, _ld, _ti in mapping:
+        if _is_reliable_brand(br):
+            brand_by_core.setdefault(core, br)
+    mapping = [
+        e if (_is_reliable_brand(e[2]) or e[0] not in brand_by_core)
+        else (e[0], e[1], brand_by_core[e[0]], e[3], e[4])
+        for e in mapping
+    ]
     return mapping
 
 def _get_brands(mapping: list = None) -> list:
