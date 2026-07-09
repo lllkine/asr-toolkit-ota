@@ -283,14 +283,14 @@ def _sheet_is_meta(ws) -> bool:
 
 def _find_sent_col(ws):
     """
-    在 header 行找逆规整目标列，返回 1-based 列号；未找到返回 None。
+    在前 6 行内找逆规整目标列，返回 1-based 列号；未找到返回 None。
+    扫多行是为兼容"第 1 行是文档密级、表头在第 2 行"等情况（表头行随后会被
+    '去前导中文行'逻辑一并删掉）。
     """
-    header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
-    if not header:
-        return None
-    for i, v in enumerate(header, 1):
-        if v and any(kw in str(v) for kw in _SENT_COL_KW):
-            return i
+    for row in ws.iter_rows(min_row=1, max_row=6, values_only=True):
+        for i, v in enumerate(row, 1):
+            if v and any(kw in str(v) for kw in _SENT_COL_KW):
+                return i
     return None
 
 def _shuofa_content_ok(ws) -> bool:
@@ -650,21 +650,32 @@ def process_excel(path: str) -> bool:
         # ── 处理 sent ────────────────────────────────────────
         if sent_cur:
             ws = wb[sent_cur]
-            # 用 _find_sent_col 定位逆规整目标列（比手写循环更清晰）
+            # 定位"逆规整后"目标列（扫前 6 行，兼容表头不在第 1 行）
             target_col = _find_sent_col(ws)
-            if target_col and ws.max_column > 1:
+            if target_col and ws.max_column >= 1:
+                # 找到含"逆规整后"的表头行，只留该列、并把表头及以上(含密级行)删掉
+                header_row = 1
+                for ri, row in enumerate(
+                        ws.iter_rows(min_row=1, max_row=6, values_only=True), 1):
+                    v = row[target_col - 1] if target_col <= len(row) else None
+                    if v and any(kw in str(v) for kw in _SENT_COL_KW):
+                        header_row = ri
+                        break
                 for col in range(ws.max_column, 0, -1):
                     if col != target_col:
                         ws.delete_cols(col)
-            # 去除中文 header 行
-            rows_to_strip = 0
-            for row in ws.iter_rows(min_row=1):
-                if any(c.value and CHINESE_PATTERN.search(str(c.value)) for c in row):
-                    rows_to_strip += 1
-                else:
-                    break
-            if rows_to_strip:
-                ws.delete_rows(1, rows_to_strip)
+                if header_row >= 1:
+                    ws.delete_rows(1, header_row)
+            else:
+                # 整表即"逆规整后"（无表头列）→ 去掉前导中文表头行
+                rows_to_strip = 0
+                for row in ws.iter_rows(min_row=1):
+                    if any(c.value and CHINESE_PATTERN.search(str(c.value)) for c in row):
+                        rows_to_strip += 1
+                    else:
+                        break
+                if rows_to_strip:
+                    ws.delete_rows(1, rows_to_strip)
             if ws.title != sent_name:
                 ws.title = sent_name
                 sent_cur = sent_name
