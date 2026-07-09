@@ -603,9 +603,12 @@ def process_excel(path: str) -> bool:
                 else:
                     print(f"  [警告] {os.path.basename(path)}: [{s}] 含大量中文，不视为 shuofa")
                 continue
-            # sent 关键词命中
-            if sent_cur is None and _is_sent(s):
-                sent_cur = s
+            # sent：跳过空表；含"逆规整后"列的最优先（避免误选同名空表如【3】语料）
+            if _is_sent(s) and ws_tmp.max_row > 1:
+                if _find_sent_col(ws_tmp):
+                    sent_cur = s          # 有逆规整后列 → 最可靠，锁定（覆盖仅名字命中的）
+                elif sent_cur is None:
+                    sent_cur = s          # 仅名字命中且非空 → 暂定（兼容"逆规整后"整表格式）
                 continue
 
         # ── 第二轮：名字兜底（内容无法判断的 sheet）──────────
@@ -621,6 +624,19 @@ def process_excel(path: str) -> bool:
                 # 已有 sent → 不再抢 sent 位；反之亦然
                 if shuofa_cur is None and _is_shuofa_fallback(s) and _shuofa_content_ok(ws_tmp):
                     shuofa_cur = s
+
+        # ── 兜底：仍没找到 sent → 选任意"含逆规整后列且有数据"的非元数据表 ──
+        # （用户规则：需要的数据就是表头叫"逆规整后"的那一列，与 sheet 名无关）
+        if sent_cur is None:
+            for s in sheets:
+                if s in ('<>', '-') or s == shuofa_cur:
+                    continue
+                ws_tmp = wb[s]
+                if _sheet_is_meta(ws_tmp):
+                    continue
+                if _find_sent_col(ws_tmp) and ws_tmp.max_row > 1:
+                    sent_cur = s
+                    break
 
         if shuofa_cur is None and sent_cur is None:
             print(f"  [跳过] 无法识别 sheet 结构: {path}")
