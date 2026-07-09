@@ -34,6 +34,7 @@ INCREMENTAL_DIR_PREFIX = '新增语料'
 BACKUP_DIR_PREFIX = 'backup_语料'
 BACKUPS_DIR     = '_backups'          # 备份归拢目录
 OUTPUTS_DIR     = '_outputs'          # 增量语料 / zip 输出
+TESTSET_DIR     = os.path.join(OUTPUTS_DIR, '测试集')   # TTS 测试集（收进 corpus，方便查找）
 REPORTS_DIR     = '_reports'          # 处理报告 / 排期状态
 ARCHIVE_DIR     = '_archive'          # 历史产物归档（人工清理）
 KEEP_RECENT     = int(os.environ.get('PIPELINE_KEEP', '5'))  # 各类产物保留份数
@@ -552,7 +553,9 @@ def step8_prune(keep: int = None) -> None:
         (OUTPUTS_DIR, "final_new_only_*.zip",        'file', 'outputs'),
         (REPORTS_DIR, "处理报告_*.txt",              'file', 'reports'),
         (REPORTS_DIR, "排期_状态_*.xlsx",            'file', 'reports'),
-        (TTS_TOOLS_DIR, "auto_tts_2*",               'dir',  'auto_tts'),
+        (TESTSET_DIR, "auto_tts_2*",                 'dir',  'auto_tts'),
+        (TESTSET_DIR, "auto_tts_2*.zip",             'file', 'auto_tts'),
+        (TTS_TOOLS_DIR, "auto_tts_2*",               'dir',  'auto_tts'),  # 兼容旧位置
         (TTS_TOOLS_DIR, "auto_tts_2*.zip",           'file', 'auto_tts'),
     ]
     total = 0
@@ -953,7 +956,9 @@ def step4_synthesize_incremental(incremental_dir: str, skip_dedup: bool = False)
         result['skipped'].append("empty tts config")
         return result
 
-    output_dir = os.path.join(TTS_TOOLS_DIR, f"auto_tts_{RUN_TIMESTAMP}")
+    # 测试集输出到 corpus 的 _outputs/测试集/（绝对路径：合成子进程 cwd 在 tts_tools）
+    output_dir = os.path.abspath(os.path.join(_ensure_dir(TESTSET_DIR),
+                                              f"auto_tts_{RUN_TIMESTAMP}"))
     os.makedirs(output_dir, exist_ok=True)
     result['enabled'] = True
     result['output_dir'] = output_dir
@@ -1324,15 +1329,21 @@ def step9_transfer(files: list, receives=None) -> dict:
 def _latest_run_products() -> list:
     """找最近一次运行的 new_corpus 与配套 auto_tts 产物，供 send 子命令重发。"""
     ncs = sorted(glob.glob(os.path.join(OUTPUTS_DIR, "new_corpus_*.zip")))
-    ttss = sorted(glob.glob(os.path.join(TTS_TOOLS_DIR, "auto_tts_2*.zip")))
+    ttss = (sorted(glob.glob(os.path.join(TESTSET_DIR, "auto_tts_2*.zip"))) or
+            sorted(glob.glob(os.path.join(TTS_TOOLS_DIR, "auto_tts_2*.zip"))))
     files = []
     if ncs:
         nc = ncs[-1]
         files.append(nc)
-        # 用同一 run 时间戳找配套的 auto_tts，找不到再退回最新
+        # 用同一 run 时间戳找配套的 auto_tts（新位置优先，回退旧位置）
         m = re.search(r'new_corpus_(\d{8}_\d{6})\.zip$', nc)
-        paired = (os.path.join(TTS_TOOLS_DIR, f"auto_tts_{m.group(1)}.zip")
-                  if m else '')
+        paired = ''
+        if m:
+            for base in (TESTSET_DIR, TTS_TOOLS_DIR):
+                cand = os.path.join(base, f"auto_tts_{m.group(1)}.zip")
+                if os.path.exists(cand):
+                    paired = cand
+                    break
         if paired and os.path.exists(paired):
             files.append(paired)
         elif ttss:
