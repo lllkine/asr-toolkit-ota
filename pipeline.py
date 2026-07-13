@@ -63,27 +63,31 @@ def _tts_dir_candidates():
     return cands
 
 
+def _tts_dir_has(d, *names):
+    return all(os.path.isfile(os.path.join(d, n)) for n in names)
+
+
 def _tts_dir_complete(d):
-    """脚本和音色表都在才算数（少一个，合成必哑火）。"""
-    return (os.path.isfile(os.path.join(d, 'asr_tts_tool.py')) and
-            os.path.isfile(os.path.join(d, 'all_voices.json')))
+    """脚本和音色表都在才算数（少一个，LANG_CONFIG 就是空的，合成必哑火）。"""
+    return _tts_dir_has(d, 'asr_tts_tool.py', 'all_voices.json')
 
 
 def _resolve_tts_tools_dir():
-    """定位 TTS 工具目录：环境变量 > 候选里第一个「完整」的。
-    必须同时有 asr_tts_tool.py 和 all_voices.json —— 只有脚本、没音色表的残缺目录
-    （OTA 只更新脚本时会造出这么一个）会让 LANG_CONFIG 空掉、合成整段静默跳过，
-    所以残缺目录一律不认，继续往后找。"""
+    """定位 TTS 工具目录：环境变量 > 候选里最完整的一个。
+    分三档退让，而不是"缺一样就淘汰"——淘汰会把人推回只读打包原件里的旧脚本：
+      ① 脚本 + 音色表 + ffmpeg（合成真正需要的三件套，ffmpeg 按 argv[0] 同目录找）
+      ② 脚本 + 音色表（能读配置，合成时缺 ffmpeg 会明确报错）
+      ③ 只有脚本（让 step4 把「缺什么」打出来，而不是静默跳过）"""
     v = os.environ.get('TTS_TOOLS_DIR', '').strip()
     if v:
         return v
     cands = _tts_dir_candidates()
-    for c in cands:
-        if _tts_dir_complete(c):
-            return c
-    for c in cands:      # 全都残缺：挑第一个有脚本的，让 step4 把缺什么明确报出来
-        if os.path.isfile(os.path.join(c, 'asr_tts_tool.py')):
-            return c
+    for need in (('asr_tts_tool.py', 'all_voices.json', 'ffmpeg.exe'),
+                 ('asr_tts_tool.py', 'all_voices.json'),
+                 ('asr_tts_tool.py',)):
+        for c in cands:
+            if _tts_dir_has(c, *need):
+                return c
     return r'D:\tts_tools'
 
 
@@ -1529,6 +1533,18 @@ def step4_verify(mapping: list) -> dict:
               'struct_warns': [], 'lang_errors': [], 'lang_ok': 0,
               'lang_skip': 0, 'file_list': [], 'distribution': {}}
 
+    # ── 核验 0：排期本身 ────────────────────────────────
+    # mapping 为空时下面每一项核验都会「0 个全部通过」，最后盖章"数据完整可信"——
+    # 而真相是整条流水线空转（没归档、没标准化、没合成）。空排期必须当失败。
+    if not mapping:
+        result['pass'] = False
+        why = ('排期.xlsx 不存在' if not os.path.exists(SCHEDULE_FILE)
+               else '排期.xlsx 读不出任何任务（被 Excel 占用？表头变了？）')
+        result['missing'].append(why)
+        print(f"  [FAIL] {why} —— 本次没有任何任务可核验，流水线实际是空转的。")
+        print(f"  [FAIL] 当前工作目录：{os.getcwd()}")
+        return result
+
     # ── 核验 1：文件完整性 ──────────────────────────────
     print("  -- 核验 1/3：文件完整性（排期对照）")
     for entry in mapping:
@@ -2009,6 +2025,20 @@ if __name__ == "__main__":
         tts_zip = stats.get('step4_tts', {}).get('zip', '')
         stats['step9'] = step9_transfer([new_corpus_zip, tts_zip], recv)
 
-    print("\n流水线执行完毕。" +
-          ("" if verify_result['pass'] else "  <- 请处理上方错误！"))
-    sys.exit(0 if verify_result['pass'] else 1)
+    # 退出码要反映"东西到底出来没有"，不能只看核验：
+    # 合成挂了 / 传输挂了 而 exit 0，GUI 就会显示绿色「完成」，用户不翻报告根本发现不了。
+    problems = []
+    if not verify_result['pass']:
+        problems.append("核验未通过")
+    tts_failed = stats.get('step4_tts', {}).get('failed') or []
+    if tts_failed:
+        problems.append(f"合成失败（{len(tts_failed)} 项，本次无测试集）")
+    s9_failed = stats.get('step9', {}).get('failed') or []
+    if s9_failed:
+        problems.append(f"传输失败（{', '.join(s9_failed)}）")
+
+    if problems:
+        print("\n流水线执行完毕，但有问题：" + "；".join(problems) + "  <- 请处理上方错误！")
+    else:
+        print("\n流水线执行完毕。")
+    sys.exit(1 if problems else 0)

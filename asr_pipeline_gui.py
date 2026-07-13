@@ -94,37 +94,49 @@ VERSION = _read_version(APP)
 UPDATE_FILES = ["pipeline.py", "web_download.py", "qq_schedule.py",
                 "xf_engine.py", "send_mail.py",
                 "asr_pipeline_gui.py", "version.txt",
-                os.path.join("tts_tools", "asr_tts_tool.py")]
+                os.path.join("tts_tools", "asr_tts_tool.py"),
+                # 音色表也要能热更：加了新语种音色而只发脚本，等于发了个用不了的功能
+                os.path.join("tts_tools", "all_voices.json")]
 
 
 def _tts_tools_dir() -> str:
-    """和 pipeline 一致地定位 TTS 工具目录：脚本 + 音色表齐全才算数。找不到返回空。"""
+    """定位 TTS 工具目录。**必须和 pipeline._resolve_tts_tools_dir() 规则完全一致**：
+    两边不一致 = 更新写进 A 目录、运行却加载 B 目录，就是"更新了个寂寞"那类 bug 的温床。
+    所以直接复用 pipeline 的实现，只在导不进来时退回同样的三档规则。"""
     v = os.environ.get("TTS_TOOLS_DIR", "").strip()
     if v:
         return v
-    # APP/tts_tools 排最前：launcher 首启复制出来的可写副本，OTA 该更新的就是它。
-    # _MEIPASS/runtime 是只读打包原件，写进去也没用（下次启动还是旧的）。
+    try:
+        sys.path.insert(0, APP)
+        from pipeline import _resolve_tts_tools_dir      # 唯一事实来源
+        return _resolve_tts_tools_dir()
+    except Exception:
+        pass
+    # 兜底：pipeline 导不进来（缺 pandas 等）时，就地照抄同一套三档规则
     cands = [os.path.join(APP, "tts_tools")]
     mei = getattr(sys, "_MEIPASS", "")
     if mei:
         cands.append(os.path.join(mei, "runtime", "tts_tools"))
     cands += [os.path.join(APP, "_internal", "runtime", "tts_tools"),
               r"D:\tts_tools"]
-    for c in cands:
-        if (os.path.isfile(os.path.join(c, "asr_tts_tool.py")) and
-                os.path.isfile(os.path.join(c, "all_voices.json"))):
-            return c
+    for need in (("asr_tts_tool.py", "all_voices.json", "ffmpeg.exe"),
+                 ("asr_tts_tool.py", "all_voices.json"),
+                 ("asr_tts_tool.py",)):
+        for c in cands:
+            if all(os.path.isfile(os.path.join(c, n)) for n in need):
+                return c
     return ""
 
 
 def _update_dest(rel: str) -> str:
-    """更新文件的落地位置。TTS 脚本必须写进「真正在用的」TTS 目录：
-    直接写 APP/tts_tools 会造出一个只有脚本、没 all_voices.json 的残缺目录，
-    它会被优先选中导致音色表读不到，合成整段静默失效。"""
-    if rel.replace("\\", "/") == "tts_tools/asr_tts_tool.py":
+    """更新文件的落地位置。tts_tools/ 下的东西必须写进「真正在用的」那个 TTS 目录：
+    盲写 APP/tts_tools 会造出一个残缺目录（或写进只读的打包原件旁），
+    结果就是更新了个寂寞——程序加载的仍是别处那份旧文件。"""
+    r = rel.replace("\\", "/")
+    if r.startswith("tts_tools/"):
         d = _tts_tools_dir()
         if d:
-            return os.path.join(d, "asr_tts_tool.py")
+            return os.path.join(d, os.path.basename(r))
     return os.path.join(APP, rel)
 
 
@@ -1165,14 +1177,26 @@ class GUI(QWidget):
                 QMessageBox.information(self, "检查更新", f"已是最新版本（{VERSION}）。")
                 return
             import shutil
+            # 本地/共享盘更新源没有 _fetch_raw_base 的原子性保护：源里缺文件会被
+            # 无声跳过，却照样弹「更新完成」——正好造出"代码换了一半"的残缺环境。
+            # 先整体校验，缺一个就整次不更新。
+            missing = [rel for rel in UPDATE_FILES
+                       if not os.path.exists(os.path.join(updir, rel))]
+            if missing:
+                self.append(f"[更新] 更新源缺 {len(missing)} 个文件，本次不更新："
+                            f"{'、'.join(missing)}\n")
+                QMessageBox.warning(
+                    self, "检查更新",
+                    f"更新源不完整，缺 {len(missing)} 个文件：\n" + "\n".join(missing) +
+                    "\n\n为避免只更新一半导致程序半残，本次不更新。")
+                return
             n = 0
             for rel in UPDATE_FILES:
                 s = os.path.join(updir, rel)
-                if os.path.exists(s):
-                    d = _update_dest(rel)
-                    os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
-                    shutil.copy2(s, d); n += 1
-                    self.append(f"[更新] {rel}\n")
+                d = _update_dest(rel)
+                os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
+                shutil.copy2(s, d); n += 1
+                self.append(f"[更新] {rel}  ->  {d}\n")
             self.upd_pill.setText("● 更新完成，请重启")
             self.upd_pill.show()
             QMessageBox.information(

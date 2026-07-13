@@ -133,8 +133,10 @@ def update_schedule(rows: list) -> int:
         wb.save(SCHEDULE)
         return added
     except Exception as e:
-        print(f"  [排期] 更新失败：{e}", flush=True)
-        return 0
+        # 返回 0 会被上层打成"✓ 新增 0 行（已存在的不重复）"——写失败和本来就都有，
+        # 长得一模一样。用 None 区分开。最常见的失败：排期.xlsx 正被 Excel 打开。
+        print(f"  [排期] ✗ 写入失败：{e}", flush=True)
+        return None
 
 
 def upsert_schedule(rows: list) -> tuple:
@@ -359,7 +361,20 @@ def download(base: str = RMP_BASE, scope: str = "all",
                 continue
             fname = f"{_safe(seq)}.xlsx"
             try:
-                body = req.get(picked["path"], timeout=120000).body()
+                r = req.get(picked["path"], timeout=120000)
+                body = r.body()
+                # 会话中途过期时接口会返回 200 的登录页/错误 JSON，.body() 照样给字节。
+                # 不校验就会把 HTML 当 xlsx 落盘，还一路被归档进语料库。
+                bad = ''
+                if r.status != 200:
+                    bad = f"HTTP {r.status}"
+                elif not body[:2] == b'PK':          # xlsx 是 zip，magic 必是 PK
+                    head = body[:200].decode('utf-8', 'replace').strip().replace('\n', ' ')
+                    bad = f"返回的不是 xlsx（{len(body)}B，开头：{head[:80]}）"
+                if bad:
+                    print(f"[{i}/{len(items)}] {seq} 下载失败：{bad}", flush=True)
+                    fail += 1
+                    continue
                 with open(os.path.join(INBOX, fname), "wb") as f:
                     f.write(body)
                 print(f"[{i}/{len(items)}] {seq}  ↓ {len(body)//1024}KB  {fname}", flush=True)
@@ -382,9 +397,14 @@ def download(base: str = RMP_BASE, scope: str = "all",
                 fail += 1
         browser.close()
         added = update_schedule(sched_rows)
-        print(f"✓ 完成：下载 {ok}，跳过 {skip}，失败 {fail}  ->  _inbox", flush=True)
-        print(f"✓ 排期表：自动新增 {added} 行（已存在的不重复）  ->  排期.xlsx", flush=True)
-    return 0
+        mark = '✓' if not fail else '✗'
+        print(f"{mark} 完成：下载 {ok}，跳过 {skip}，失败 {fail}  ->  _inbox", flush=True)
+        if added is None:
+            print("✗ 排期表：写入失败，本批单号没进排期（排期.xlsx 是不是正被 Excel 打开？）"
+                  "  —— 不补录的话，处理时这些文件会全进 待确认/", flush=True)
+        else:
+            print(f"✓ 排期表：自动新增 {added} 行（已存在的不重复）  ->  排期.xlsx", flush=True)
+    return 1 if (fail or added is None) else 0
 
 
 def _origin(url: str) -> str:

@@ -247,7 +247,13 @@ def fetch_sheet(tab: str = "", auto_login: bool = True) -> list:
 
 def _copy_sheet_rows(page, tab: str) -> list:
     """在已登录的页面上：切 tab → 全选复制 → TSV 行。"""
-    _resolve_tab(page, tab)
+    tab_ok = _resolve_tab(page, tab)
+    if tab and not tab_ok:
+        # 没切中 tab 就复制，读到的是别的 tab 的数据，后面还会在错误数据里模糊匹配，
+        # 最后可能把别的引擎的版本号/货架地址群发出去。宁可不给结果。
+        print(f"✗ 未能切到 tab「{tab}」，为避免读到错误 tab 的数据，本次不返回结果。"
+              f"请确认 tab 名是否正确（可用 tabs 命令列出）。", flush=True)
+        return []
     page.mouse.click(700, 500)
     page.wait_for_timeout(600)
     page.keyboard.press("Control+A")
@@ -258,8 +264,12 @@ def _copy_sheet_rows(page, tab: str) -> list:
     try:
         txt = page.evaluate("navigator.clipboard.readText()")
     except Exception as e:
-        print(f"✗ 读取失败：{e}", flush=True)
+        print(f"✗ 读表失败（剪贴板不可读）：{e}", flush=True)
     if not txt:
+        # 空串≠"表里没有匹配记录"。不说清楚的话，上层会打成"没有匹配的引擎记录"，
+        # 用户以为引擎还没上架，实际是读表挂了（页面没加载完/tab 没切中/剪贴板权限）。
+        print("✗ 读表失败：没从表格里复制到任何内容（页面可能没加载完，或剪贴板被拒）。"
+              "这不代表『引擎不存在』，请重试或重新登录。", flush=True)
         return []
     return list(csv.reader(io.StringIO(txt), delimiter="\t"))
 
@@ -448,12 +458,16 @@ def _download_rec_on_page(page, ctx, rec: dict) -> int:
             got += 1
         except Exception as e:
             print(f"  [失败] {fn}: {str(e)[:120]}", flush=True)
-        # 取消勾选，避免影响下一个
+        # 取消勾选，避免影响下一个（原来写的是 cb，这变量根本不存在 → 每轮抛 NameError
+        # 被 except 吞掉，复选框其实从没被取消过：货架里有多个包时会累积勾选，
+        # 下载按钮作用于"已勾选的全部"，而我们只接住第一个 download 事件）
         try:
-            cb.click()
-            page.wait_for_timeout(400)
-        except Exception:
-            pass
+            if el is not None:
+                el.click(force=True, timeout=3000)
+                page.wait_for_timeout(400)
+        except Exception as e:
+            print(f"  [warn] {fn}: 取消勾选失败（{str(e)[:60]}），"
+                  f"下一个包可能被连带下载", flush=True)
 
     if not targets:
         shot = os.path.join(dest_dir, "货架页面.png")
