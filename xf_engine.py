@@ -245,6 +245,45 @@ def fetch_sheet(tab: str = "", auto_login: bool = True) -> list:
     return fetch_sheet(tab, auto_login=False)
 
 
+def _copy_one(page) -> str:
+    """点一下表格 → 全选 → 复制 → 读剪贴板。"""
+    page.mouse.click(700, 500)
+    page.wait_for_timeout(400)
+    page.keyboard.press("Control+A")
+    page.wait_for_timeout(400)
+    page.keyboard.press("Control+C")
+    page.wait_for_timeout(2000)
+    try:
+        return page.evaluate("navigator.clipboard.readText()") or ""
+    except Exception as e:
+        print(f"✗ 读表失败（剪贴板不可读）：{e}", flush=True)
+        return ""
+
+
+def _select_all_after_full_load(page) -> str:
+    """表格是懒加载的：不滚到底就直接全选复制，只能拿到已渲染的前几百行——
+    最近上架的引擎（表是按时间升序排的，新的在最后）全部读不到，
+    于是"取最新"取到的其实是几个月前的旧引擎。
+    所以：先反复滚到底，直到复制到的行数不再增长，再取最终结果。"""
+    txt = _copy_one(page)
+    last = len(txt.splitlines())
+    for _round in range(8):
+        for _ in range(15):                 # 一轮猛滚，触发后续分页加载
+            page.keyboard.press("Control+End")
+            page.wait_for_timeout(500)
+            page.mouse.wheel(0, 20000)
+            page.wait_for_timeout(300)
+        page.wait_for_timeout(2000)
+        txt = _copy_one(page)
+        n = len(txt.splitlines())
+        if n <= last:                       # 不再增长 = 已经到底
+            break
+        print(f"  [读表] 已加载 {n} 行…", flush=True)
+        last = n
+    print(f"  [读表] 共 {last} 行", flush=True)
+    return txt
+
+
 def _copy_sheet_rows(page, tab: str) -> list:
     """在已登录的页面上：切 tab → 全选复制 → TSV 行。"""
     tab_ok = _resolve_tab(page, tab)
@@ -254,17 +293,7 @@ def _copy_sheet_rows(page, tab: str) -> list:
         print(f"✗ 未能切到 tab「{tab}」，为避免读到错误 tab 的数据，本次不返回结果。"
               f"请确认 tab 名是否正确（可用 tabs 命令列出）。", flush=True)
         return []
-    page.mouse.click(700, 500)
-    page.wait_for_timeout(600)
-    page.keyboard.press("Control+A")
-    page.wait_for_timeout(600)
-    page.keyboard.press("Control+C")
-    page.wait_for_timeout(2500)
-    txt = ""
-    try:
-        txt = page.evaluate("navigator.clipboard.readText()")
-    except Exception as e:
-        print(f"✗ 读表失败（剪贴板不可读）：{e}", flush=True)
+    txt = _select_all_after_full_load(page)
     if not txt:
         # 空串≠"表里没有匹配记录"。不说清楚的话，上层会打成"没有匹配的引擎记录"，
         # 用户以为引擎还没上架，实际是读表挂了（页面没加载完/tab 没切中/剪贴板权限）。
@@ -275,26 +304,34 @@ def _copy_sheet_rows(page, tab: str) -> list:
 
 
 def parse_engines(rows: list) -> list:
-    """TSV → 引擎记录。列：V R M 语种 归属 描述 上架同学 上架时间 货架位置"""
+    """TSV → 引擎记录。列：V R M 语种 归属 描述 上架同学 上架时间 货架位置
+
+    以「货架 URL」这一列为锚点倒推各字段，不按固定下标取：
+    表格复制出来时前面可能多一列（序号/复选框），按 r[0]=V 硬取会整体错位一格，
+    把「语种」读成版本号、「归属」读成语种，匹配和展示全乱。"""
     out = []
     for r in rows:
-        if len(r) < 6:
+        ui = -1
+        for i in range(len(r) - 1, -1, -1):
+            if str(r[i] or "").strip().lower().startswith("http"):
+                ui = i
+                break
+        if ui < 0:
             continue
-        url = next((c for c in reversed(r) if c.startswith("http")), "")
-        if not url:
-            continue
-        date_t = _row_date(r)
-        desc_full = r[5].strip() if len(r) > 5 else ""
+
+        def cell(idx, _r=r):
+            return str(_r[idx]).strip() if 0 <= idx < len(_r) else ""
+
+        desc_full = cell(ui - 3)
+        date_t = _parse_date(cell(ui - 1)) or _row_date(r)
         rec = {
-            "V": r[0].strip(), "R": r[1].strip() if len(r) > 1 else "",
-            "M": r[2].strip() if len(r) > 2 else "",
-            "语种": r[3].strip() if len(r) > 3 else "",
-            "归属": r[4].strip() if len(r) > 4 else "",
+            "V": cell(ui - 8), "R": cell(ui - 7), "M": cell(ui - 6),
+            "语种": cell(ui - 5), "归属": cell(ui - 4),
             "描述": desc_full[:60], "_描述全": desc_full,
             # 归一成 2026.05.12，补零后字符串序 == 时间序，肉眼和排序都不会再错
             "上架时间": ("%04d.%02d.%02d" % date_t) if date_t else "",
             "_日期": date_t,                      # 真正用来排序的元组，解析不出为 None
-            "货架": url,
+            "货架": cell(ui),
         }
         if rec["语种"]:
             out.append(rec)
