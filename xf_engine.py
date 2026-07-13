@@ -194,12 +194,21 @@ def _resolve_tab(page, tab_name: str) -> bool:
         return False
 
 
-def fetch_sheet(tab: str = "") -> list:
-    """打开表格 → 切 tab → 全选复制 → 返回 TSV 行列表。"""
+def fetch_sheet(tab: str = "", auto_login: bool = True) -> list:
+    """打开表格 → 切 tab → 全选复制 → 返回 TSV 行列表。
+    没登录 / 会话过期时：直接弹出扫码登录窗口，登完自动重来一次，不用用户自己找入口。"""
     from playwright.sync_api import sync_playwright
     if not os.path.exists(XF_STATE):
-        print("✗ 未登录 xfchat，请先运行 login（界面上点「引擎登录」）。", flush=True)
-        return []
+        if not auto_login:
+            print("✗ 未登录 xfchat。", flush=True)
+            return []
+        print("! 尚未登录 xfchat，正在打开登录窗口，请用 i讯飞 App 扫码…", flush=True)
+        if login() != 0:
+            return []
+        return fetch_sheet(tab, auto_login=False)
+
+    expired = False
+    rows = []
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
         ctx = b.new_context(storage_state=XF_STATE,
@@ -212,22 +221,44 @@ def fetch_sheet(tab: str = "") -> list:
             print(f"[warn] {e}", flush=True)
         page.wait_for_timeout(11000)
         if "login" in page.url:
-            print("✗ xfchat 会话已失效，请重新登录。", flush=True)
+            expired = True
             b.close()
-            return []
-        _resolve_tab(page, tab)
-        page.mouse.click(700, 500)
-        page.wait_for_timeout(600)
-        page.keyboard.press("Control+A")
-        page.wait_for_timeout(600)
-        page.keyboard.press("Control+C")
-        page.wait_for_timeout(2500)
-        txt = ""
-        try:
-            txt = page.evaluate("navigator.clipboard.readText()")
-        except Exception as e:
-            print(f"✗ 读取失败：{e}", flush=True)
-        b.close()
+        else:
+            rows = _copy_sheet_rows(page, tab)
+            b.close()
+
+    if not expired:
+        return rows
+
+    # 过期分支必须等 sync_playwright 退出后再走：login() 自己也开 playwright，不能嵌套
+    try:
+        os.remove(XF_STATE)          # 清掉过期票据，避免下次又拿它去撞登录页
+    except OSError:
+        pass
+    if not auto_login:
+        print("✗ xfchat 会话已失效，且自动重新登录后仍未通过。请点「引擎登录」重试。", flush=True)
+        return []
+    print("! xfchat 会话已失效，正在打开登录窗口，请用 i讯飞 App 扫码；"
+          "登录后关闭浏览器窗口即可，工具会自动接着查。", flush=True)
+    if login() != 0:
+        return []
+    return fetch_sheet(tab, auto_login=False)
+
+
+def _copy_sheet_rows(page, tab: str) -> list:
+    """在已登录的页面上：切 tab → 全选复制 → TSV 行。"""
+    _resolve_tab(page, tab)
+    page.mouse.click(700, 500)
+    page.wait_for_timeout(600)
+    page.keyboard.press("Control+A")
+    page.wait_for_timeout(600)
+    page.keyboard.press("Control+C")
+    page.wait_for_timeout(2500)
+    txt = ""
+    try:
+        txt = page.evaluate("navigator.clipboard.readText()")
+    except Exception as e:
+        print(f"✗ 读取失败：{e}", flush=True)
     if not txt:
         return []
     return list(csv.reader(io.StringIO(txt), delimiter="\t"))
@@ -542,8 +573,9 @@ def main():
         # tab 名在页面顶部，直接列出（读 DOM 文本）
         from playwright.sync_api import sync_playwright
         if not os.path.exists(XF_STATE):
-            print("✗ 未登录 xfchat。", flush=True)
-            sys.exit(2)
+            print("! 尚未登录 xfchat，正在打开登录窗口，请用 i讯飞 App 扫码…", flush=True)
+            if login() != 0:
+                sys.exit(2)
         with sync_playwright() as p:
             b = p.chromium.launch(headless=True)
             ctx = b.new_context(storage_state=XF_STATE, viewport={"width": 1600, "height": 1000})

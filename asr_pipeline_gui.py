@@ -644,13 +644,17 @@ class GUI(QWidget):
 
         # 相关登录/配置（小号入口，归位到本卡片）
         acc = QHBoxLayout(); acc.setSpacing(2)
-        hint = QLabel("账号：")
+        hint = QLabel("账号（提示“会话已失效”时点这里）：")
         hint.setObjectName("hint")
         acc.addWidget(hint)
-        for txt, fn in [("引擎登录", lambda: self.run(["engine", "login"])),
-                        ("登录E3", lambda: self.run(["engine", "login-devops"])),
-                        ("邮件配置", self.open_mail_config)]:
+        for txt, tip, fn in [
+                ("重新登录xfchat", "查引擎的表格登录：i讯飞 App 扫码。提示「xfchat 会话已失效」时点这里",
+                 lambda: self.run(["engine", "login"])),
+                ("重新登录E3", "引擎下载用的 E3/制品库登录：集团账号或扫码",
+                 lambda: self.run(["engine", "login-devops"])),
+                ("邮件配置", "配置发件邮箱与收件人", self.open_mail_config)]:
             b = QPushButton(txt); b.setObjectName("miniGhost"); b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
             b.clicked.connect(fn); acc.addWidget(b)
         acc.addStretch(1)
         self.mid_add(c, acc)
