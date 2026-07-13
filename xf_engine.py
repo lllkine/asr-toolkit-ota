@@ -283,7 +283,7 @@ def parse_engines(rows: list) -> list:
         url = next((c for c in reversed(r) if c.startswith("http")), "")
         if not url:
             continue
-        date = next((c for c in r if re.match(r'^20\d\d[.\-/]\d{1,2}[.\-/]\d{1,2}$', c.strip())), "")
+        date_t = _row_date(r)
         desc_full = r[5].strip() if len(r) > 5 else ""
         rec = {
             "V": r[0].strip(), "R": r[1].strip() if len(r) > 1 else "",
@@ -291,11 +291,44 @@ def parse_engines(rows: list) -> list:
             "语种": r[3].strip() if len(r) > 3 else "",
             "归属": r[4].strip() if len(r) > 4 else "",
             "描述": desc_full[:60], "_描述全": desc_full,
-            "上架时间": date, "货架": url,
+            # 归一成 2026.05.12，补零后字符串序 == 时间序，肉眼和排序都不会再错
+            "上架时间": ("%04d.%02d.%02d" % date_t) if date_t else "",
+            "_日期": date_t,                      # 真正用来排序的元组，解析不出为 None
+            "货架": url,
         }
         if rec["语种"]:
             out.append(rec)
     return out
+
+
+_DATE_RE = re.compile(r'(20\d\d)\s*[.\-/年]\s*(\d{1,2})\s*[.\-/月]\s*(\d{1,2})')
+
+
+def _parse_date(s):
+    """'2026.5.12' / '2026-05-12' / '2026/5/12 10:30' / '2026年5月12日' → (2026,5,12)。
+    解析不了返回 None。"""
+    m = _DATE_RE.search(str(s or ''))
+    if not m:
+        return None
+    y, mo, d = (int(x) for x in m.groups())
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    return (y, mo, d)
+
+
+def _row_date(r):
+    """取「上架时间」。表头列位是 …上架同学(6) 上架时间(7) 货架(8)，优先按列位取；
+    列位对不上时退回整行里【最后】一个像日期的单元格 —— 不能取第一个：
+    行首的版本/计划等列也常常长得像日期，一取就取错，排序自然选错引擎。"""
+    if len(r) > 7:
+        d = _parse_date(r[7])
+        if d:
+            return d
+    for c in reversed(r):
+        d = _parse_date(c)
+        if d:
+            return d
+    return None
 
 
 def _match(rec, lang, brand):
@@ -348,10 +381,17 @@ def send_to_network(rec: dict, network: str) -> int:
            "--remark", f"{rec['上架时间']}引擎传输{rec['归属']}{rec['语种']}",
            "--target-network", network, "--files", repo]
     print("执行:", " ".join(cmd), flush=True)
-    r = subprocess.run(cmd, text=True, encoding="utf-8", errors="replace")
+    # 抓住 rftctl 自己的输出：不抓的话失败时只剩一个 exit 1，没人知道它到底在抱怨什么
+    r = subprocess.run(cmd, text=True, encoding="utf-8", errors="replace",
+                       capture_output=True)
+    detail = ((r.stdout or '') + (r.stderr or '')).strip()
     if r.returncode == 0:
+        if detail:
+            print(detail, flush=True)
         print("✓ 制品库传输流程已提交。", flush=True)
     else:
+        if detail:
+            print(f"  rftctl 原话：{detail}", flush=True)
         print(f"✗ 提交失败（exit {r.returncode}）。若提示需要具体文件路径，"
               f"可在货架页面找到文件名后重试：--files {repo}/<文件名>", flush=True)
     return r.returncode
@@ -614,17 +654,32 @@ def main():
     if not recs:
         print("✗ 没有匹配的引擎记录（精确和模糊都未命中）。", flush=True)
         sys.exit(1)
-    recs.sort(key=lambda r: r["上架时间"])
+    # 按真实日期排序（原来是按字符串排：'2026-05-12' < '2026.3.20'、'2026.12.1' < '2026.5.12'
+    # 都会排反，get 取 recs[-1] 就会下到旧引擎）。日期解析不出来的排最前，不许当"最新"。
+    recs.sort(key=lambda r: r.get("_日期") or (0, 0, 0))
+    undated = [r for r in recs if not r.get("_日期")]
 
     if args.cmd == "list":
         print(f"匹配 {len(recs)} 条（{mode}匹配，旧→新）：", flush=True)
         for r in recs:
-            print(f"  {r['上架时间']:10s} {r['归属']:10s} {r['语种']:8s} "
+            print(f"  {(r['上架时间'] or '(无日期)'):12s} {r['归属']:10s} {r['语种']:8s} "
                   f"V{r['V']} R{r['R']} M{r['M']}  {r['描述'][:30]}", flush=True)
         sys.exit(0)
 
     # get：取最新
     rec = recs[-1]
+    if undated:
+        print(f"! {len(undated)} 条记录的上架时间读不出来，已排除在『最新』判定之外："
+              f"{'、'.join((r['归属'] + r['语种'] + ' V' + r['V']) for r in undated[:5])}",
+              flush=True)
+    if not rec.get("_日期"):
+        print("✗ 匹配到的记录都没有可识别的上架时间，无法判断哪个最新。"
+              "请用 list 命令人工确认后再下载。", flush=True)
+        sys.exit(1)
+    same_day = [r for r in recs if r.get("_日期") == rec["_日期"]]
+    if len(same_day) > 1:
+        print(f"! 有 {len(same_day)} 条同为最新日期 {rec['上架时间']}，取表中最后一条。"
+              f"如不对请用 list 确认。", flush=True)
     print("最新引擎：", flush=True)
     for k in ["上架时间", "归属", "语种", "V", "R", "M", "描述"]:
         print(f"  {k}: {rec[k]}", flush=True)
