@@ -44,19 +44,21 @@ INTERNAL_DIRS   = {INBOX_DIR, BACKUPS_DIR, OUTPUTS_DIR, REPORTS_DIR,
 BUILD_ARTIFACT_DIRS     = {'dist', 'build'}
 BUILD_ARTIFACT_PREFIXES = ('asr_pipeline_',)
 def _tts_dir_candidates():
-    """TTS 工具目录候选，按优先级：打包版真身 > 程序目录 > cwd > 开发机兜底。"""
+    """TTS 工具目录候选，按优先级。
+    程序目录/tts_tools 必须排最前：launcher 首启时会把 runtime/tts_tools 完整复制过去，
+    OTA 更新的也是这一份（可写）。而 _MEIPASS/runtime/tts_tools 是只读的打包原件，
+    永远停在打包那天的版本 —— 让它优先会挑到最旧的脚本，合成直接崩。"""
     try:
         base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) \
             else os.path.dirname(os.path.abspath(__file__))
     except Exception:
         base = os.getcwd()
-    cands = []
+    cands = [os.path.join(base, 'tts_tools'),
+             os.path.join(os.getcwd(), 'tts_tools')]
     mei = getattr(sys, '_MEIPASS', '')
-    if mei:                                   # 打包版：随 exe 一起发出去的那份
+    if mei:                                   # 打包原件：仅作兜底
         cands.append(os.path.join(mei, 'runtime', 'tts_tools'))
     cands += [os.path.join(base, '_internal', 'runtime', 'tts_tools'),
-              os.path.join(base, 'tts_tools'),
-              os.path.join(os.getcwd(), 'tts_tools'),
               r'D:\tts_tools']
     return cands
 
@@ -917,6 +919,25 @@ def _infer_tts_lang(path: str) -> str:
             return lang
     return ''
 
+def _stub_tkinter_if_missing():
+    """冻结包里常常没有 tkinter/ttk。老版 asr_tts_tool.py 在模块顶层就
+    `from tkinter import ttk`，import 直接 ImportError，把读音色表和合成一起带死。
+    这里塞个空壳 tkinter：我们只需要读 LANG_CONFIG，不需要真 GUI。"""
+    import types
+    try:
+        import tkinter                       # noqa: F401
+        from tkinter import ttk              # noqa: F401
+        return
+    except Exception:
+        pass
+    tk = types.ModuleType('tkinter')
+    for sub in ('ttk', 'filedialog', 'messagebox'):
+        m = types.ModuleType('tkinter.' + sub)
+        setattr(tk, sub, m)
+        sys.modules.setdefault('tkinter.' + sub, m)
+    sys.modules.setdefault('tkinter', tk)
+
+
 def _load_tts_config() -> dict:
     tool = os.path.join(TTS_TOOLS_DIR, 'asr_tts_tool.py')
     if not os.path.exists(tool):
@@ -925,6 +946,7 @@ def _load_tts_config() -> dict:
     try:
         if TTS_TOOLS_DIR not in sys.path:
             sys.path.insert(0, TTS_TOOLS_DIR)
+        _stub_tkinter_if_missing()
         import asr_tts_tool
         config = {}
         for _, (lang_id, voices) in asr_tts_tool.LANG_CONFIG.items():

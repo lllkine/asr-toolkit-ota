@@ -102,12 +102,13 @@ def _tts_tools_dir() -> str:
     v = os.environ.get("TTS_TOOLS_DIR", "").strip()
     if v:
         return v
-    cands = []
+    # APP/tts_tools 排最前：launcher 首启复制出来的可写副本，OTA 该更新的就是它。
+    # _MEIPASS/runtime 是只读打包原件，写进去也没用（下次启动还是旧的）。
+    cands = [os.path.join(APP, "tts_tools")]
     mei = getattr(sys, "_MEIPASS", "")
     if mei:
         cands.append(os.path.join(mei, "runtime", "tts_tools"))
     cands += [os.path.join(APP, "_internal", "runtime", "tts_tools"),
-              os.path.join(APP, "tts_tools"),
               r"D:\tts_tools"]
     for c in cands:
         if (os.path.isfile(os.path.join(c, "asr_tts_tool.py")) and

@@ -23,8 +23,15 @@ if hasattr(sys.stderr, "reconfigure"):
 # 1. Language & Voice Registry
 # ------------------------------------------------------------------------
 def load_lang_config():
-    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "all_voices.json")
-    
+    # 多处查找 all_voices.json，兼容源码运行与 PyInstaller 打包
+    _cands = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "all_voices.json"),
+        os.path.join(getattr(sys, "_MEIPASS", ""), "all_voices.json"),
+        os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "all_voices.json"),
+        os.path.join(os.getcwd(), "all_voices.json"),
+    ]
+    json_path = next((c for c in _cands if c and os.path.exists(c)), _cands[0])
+
     # Preferred order to maintain compatibility with original IDs (0-27)
     preferred = [
         ("en-US", "English"), ("fr-FR", "French"), ("es-ES", "Spanish"),
