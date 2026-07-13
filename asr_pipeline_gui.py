@@ -9,7 +9,8 @@ import sys
 import html as _html
 
 from PySide6.QtCore import (Qt, QProcess, QProcessEnvironment, QPointF, QTimer,
-                            QPropertyAnimation, QEasingCurve, QObject, QEvent)
+                            QPropertyAnimation, QEasingCurve, QObject, QEvent,
+                            QThread, Signal)
 from PySide6.QtGui import (QFont, QTextCursor, QColor, QPixmap, QPainter,
                            QPen, QPolygonF, QAction, QPalette)
 from PySide6.QtWidgets import (
@@ -95,6 +96,63 @@ UPDATE_FILES = ["pipeline.py", "web_download.py", "qq_schedule.py",
                 "asr_pipeline_gui.py", "version.txt",
                 os.path.join("tts_tools", "asr_tts_tool.py")]
 
+
+def _update_source() -> str:
+    """更新源：环境变量 ASR_UPDATE_SOURCE > 程序目录 update_source.txt。"""
+    src = os.environ.get("ASR_UPDATE_SOURCE", "").strip()
+    if not src:
+        sp = os.path.join(APP, "update_source.txt")
+        if os.path.exists(sp):
+            try:
+                src = open(sp, encoding="utf-8-sig").read().strip()   # utf-8-sig 去 BOM
+            except Exception:
+                src = ""
+    return src
+
+
+def _ver_tuple(v):
+    """'20260706.19' -> (20260706, 19)；解析不了返回 None（退化成字符串比较）。"""
+    try:
+        return tuple(int(x) for x in str(v).strip().split("."))
+    except Exception:
+        return None
+
+
+def _is_newer(remote, local) -> bool:
+    rt, lt = _ver_tuple(remote), _ver_tuple(local)
+    if rt and lt:
+        return rt > lt          # 只提示升级，不把回滚当成"有更新"
+    return bool(remote) and remote != "0" and remote != local
+
+
+class UpdateChecker(QThread):
+    """后台只取更新源的 version.txt 比对版本号，不下载任何代码。有新版才发信号。"""
+    found = Signal(str)
+
+    def __init__(self, src, token, parent=None):
+        super().__init__(parent)
+        self.src, self.token = src, token
+
+    def run(self):
+        try:
+            src = self.src.rstrip("/")
+            if src.lower().startswith("http"):
+                if src.lower().endswith(".zip") or "zipball" in src.lower():
+                    return          # zip 源要整包下载才知版本，静默检查跳过
+                import urllib.request
+                req = urllib.request.Request(src + "/version.txt",
+                                             headers={"User-Agent": "Mozilla/5.0"})
+                if self.token:
+                    req.add_header("Authorization", "Bearer " + self.token)
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    remote = r.read().decode("utf-8-sig").strip()
+            else:
+                remote = _read_version(src)     # 本地/共享文件夹
+            if _is_newer(remote, VERSION):
+                self.found.emit(remote)
+        except Exception:
+            pass                    # 静默：网络不通不打扰用户，手动"检查更新"仍会报错
+
 QSS = """
 * { font-family: 'Microsoft YaHei UI','Segoe UI'; }
 QWidget#root { background: #f5f7fc; }
@@ -107,6 +165,10 @@ QLabel { color: #334155; font-size: 13px; }
 #verPill { background: rgba(255,255,255,0.16); color: #eef2ff;
            border: 1px solid rgba(255,255,255,0.22); border-radius: 12px;
            padding: 4px 14px; font-size: 11.5px; font-weight: 600; }
+#updPill { background: #f59e0b; color: #ffffff;
+           border: 1px solid #fbbf24; border-radius: 12px;
+           padding: 4px 14px; font-size: 11.5px; font-weight: 700; }
+#updPill:hover { background: #d97706; border-color: #f59e0b; }
 QScrollArea#scroll { background: #f5f7fc; border: none; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical { background: #cbd3e3; border-radius: 5px; min-height: 30px; }
@@ -381,6 +443,7 @@ class GUI(QWidget):
         self._anims.append(fade)
         QTimer.singleShot(0, fade.start)
         QTimer.singleShot(60, self._animate_cards_in)
+        QTimer.singleShot(1500, self._start_update_check)   # 等界面画完再去比版本号
 
         # 运行中呼吸灯
         self._pulse = QTimer(self); self._pulse.setInterval(450)
@@ -414,9 +477,33 @@ class GUI(QWidget):
         s.setObjectName("hSub")
         v.addWidget(t); v.addWidget(s); v.addStretch(1)
         hl.addLayout(v); hl.addStretch(1)
+        # 有新版时才出现的橙色提示（点一下直接更新）；平时隐藏
+        self.upd_pill = QPushButton("")
+        self.upd_pill.setObjectName("updPill")
+        self.upd_pill.setCursor(Qt.PointingHandCursor)
+        self.upd_pill.setToolTip("点击立即更新")
+        self.upd_pill.clicked.connect(self.check_update)
+        self.upd_pill.hide()
+        hl.addWidget(self.upd_pill, 0, Qt.AlignVCenter)
+        hl.addSpacing(8)
         pill = QLabel(f"v {VERSION}"); pill.setObjectName("verPill")
         hl.addWidget(pill, 0, Qt.AlignVCenter)
         return h
+
+    # ── 启动后静默检查更新（只比版本号，不下载代码）──
+    def _start_update_check(self):
+        src = _update_source()
+        if not src:
+            return
+        self._upd_thread = UpdateChecker(src, self._update_token(), self)
+        self._upd_thread.found.connect(self._on_update_found)
+        self._upd_thread.start()
+
+    def _on_update_found(self, remote_v):
+        self.upd_pill.setText(f"● 有新版本 v{remote_v}")
+        self.upd_pill.show()
+        self.append(f"[更新] 发现新版本 v{remote_v}（当前 v{VERSION}），"
+                    f"点右上角橙色按钮或「检查更新」即可更新。\n")
 
     # ── 步骤1：下载 ──
     def _step1(self):
@@ -1009,14 +1096,7 @@ class GUI(QWidget):
         return t
 
     def check_update(self):
-        src = os.environ.get("ASR_UPDATE_SOURCE", "").strip()
-        if not src:
-            sp = os.path.join(APP, "update_source.txt")
-            if os.path.exists(sp):
-                try:
-                    src = open(sp, encoding="utf-8-sig").read().strip()  # utf-8-sig 自动去 BOM
-                except Exception:
-                    src = ""
+        src = _update_source()
         if not src:
             QMessageBox.information(
                 self, "检查更新",
@@ -1045,7 +1125,8 @@ class GUI(QWidget):
             if remote_v == "0":
                 QMessageBox.warning(self, "检查更新", "更新源缺少 version.txt。")
                 return
-            if remote_v == VERSION:
+            if not _is_newer(remote_v, VERSION):
+                self.upd_pill.hide()          # 提示条与实际状态保持一致
                 QMessageBox.information(self, "检查更新", f"已是最新版本（{VERSION}）。")
                 return
             import shutil
@@ -1057,6 +1138,8 @@ class GUI(QWidget):
                     os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
                     shutil.copy2(s, d); n += 1
                     self.append(f"[更新] {rel}\n")
+            self.upd_pill.setText("● 更新完成，请重启")
+            self.upd_pill.show()
             QMessageBox.information(
                 self, "更新完成",
                 f"已从 {VERSION} 更新到 {remote_v}（{n} 个文件）。\n请关闭并重新打开程序生效。")
