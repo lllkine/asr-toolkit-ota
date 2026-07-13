@@ -957,6 +957,101 @@ def _extract_sent_lines(path: str) -> list:
     finally:
         wb.close()
 
+
+# ── _sent 不足 1000 条时：句式 × 槽值 → 扩展出完整句子 ──────────────
+_SLOT_RE = re.compile(r'<[^<>]{1,60}>')
+
+
+def _load_slot_values(wb) -> dict:
+    """『<>』表：首行是槽名 <xxx>，其下整列是该槽的取值。→ {槽名: [取值…]}
+    （read_only 的 worksheet 没有 iter_cols，只能按行读再转置）"""
+    vals = {}
+    if '<>' not in wb.sheetnames:
+        return vals
+    rows = list(wb['<>'].iter_rows(values_only=True))
+    if not rows:
+        return vals
+    heads = [_cell_str(v).strip() for v in rows[0]]
+    for ci, head in enumerate(heads):
+        if not (head.startswith('<') and head.endswith('>')):
+            continue
+        items = []
+        for row in rows[1:]:
+            v = _cell_str(row[ci]).strip() if ci < len(row) else ''
+            if v:
+                items.append(v)
+        if items:
+            vals[head] = items
+    return vals
+
+
+def _load_templates(wb) -> list:
+    """句式模板：『_shuofa』和『-』表里每个非空单元格就是一条句式。"""
+    out = []
+    for name in wb.sheetnames:
+        if not (name.endswith('_shuofa') or name == '-'):
+            continue
+        for row in wb[name].iter_rows(values_only=True):
+            for v in row:
+                s = _cell_str(v).strip()
+                if s:
+                    out.append(s)
+    return out
+
+
+def _expand_from_shuofa(path: str, existing: list, need: int) -> tuple:
+    """句式 × 槽值 → 完整句子，补足 _sent 不到 TTS_SAMPLE_SIZE 的部分。
+    返回 (新增句子, 说明)。新增句子与 existing 去重；槽值凑不齐的句式直接丢弃。"""
+    if need <= 0:
+        return [], ''
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        slots = _load_slot_values(wb)
+        templates = _load_templates(wb)
+    finally:
+        wb.close()
+    if not templates:
+        return [], '无句式表（_shuofa/-）'
+
+    seen = set(existing)
+    usable, unresolved = [], 0
+    for t in templates:
+        need_slots = set(_SLOT_RE.findall(t))
+        if not need_slots:
+            if t not in seen:            # 无槽的句式本身就是完整句子
+                usable.append((t, ()))
+            continue
+        if need_slots <= set(slots):
+            usable.append((t, tuple(need_slots)))
+        else:
+            unresolved += 1              # 开放实体（POI/歌手名…）没有取值表，填不了
+    if not usable:
+        return [], f'{len(templates)} 条句式的槽都无取值可填'
+
+    # 轮转各句式生成，保证覆盖均匀；tries 上限兜底，避免槽值太少时空转
+    out, idx, tries = [], 0, 0
+    max_tries = need * 40 + 500
+    while len(out) < need and tries < max_tries:
+        t, ss = usable[idx % len(usable)]
+        idx += 1
+        tries += 1
+        s = t
+        for slot in ss:
+            s = s.replace(slot, random.choice(slots[slot]))
+        if _SLOT_RE.search(s):           # 仍有填不上的槽 → 丢弃这条
+            continue
+        s = re.sub(r'\s+', ' ', s).strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+
+    note = f'{len(usable)} 条句式可填'
+    if unresolved:
+        note += f'，{unresolved} 条槽无取值已跳过'
+    if len(out) < need:
+        note += f'，槽值组合已穷尽（只扩出 {len(out)}/{need}）'
+    return out, note
+
 def step4_synthesize_incremental(incremental_dir: str, skip_dedup: bool = False) -> dict:
     """
     对本次新增目录中的 Excel 自动合成测试集。
@@ -1072,6 +1167,19 @@ def step4_synthesize_incremental(incremental_dir: str, skip_dedup: bool = False)
             print(f"    [跳过] {msg}")
             result['skipped'].append(msg)
             continue
+
+        # 不足 1000 条：用句式×槽值扩展出完整句子，再一起采样
+        expanded = 0
+        if len(lines) < TTS_SAMPLE_SIZE:
+            more, note = _expand_from_shuofa(path, lines, TTS_SAMPLE_SIZE - len(lines))
+            if more:
+                expanded = len(more)
+                lines = lines + more
+                print(f"    [扩展] {test_name}: _sent {len(lines) - expanded} 条 "
+                      f"→ 句式×槽值补 {expanded} 条 → {len(lines)} 条（{note}）")
+            elif note:
+                print(f"    [扩展] {test_name}: 未扩展（{note}）")
+
         selected = random.sample(lines, TTS_SAMPLE_SIZE) if len(lines) > TTS_SAMPLE_SIZE else lines
 
         test_dir = _unique_path(os.path.join(output_dir, test_name))
@@ -1126,7 +1234,7 @@ def step4_synthesize_incremental(incremental_dir: str, skip_dedup: bool = False)
             result['ok'].append({
                 'name': test_name, 'selected': len(selected), 'total': len(lines),
                 'wav': wav_count, 'dir': test_dir, 'locale': locale, 'voice': voice,
-                'zip': test_zip_path,
+                'zip': test_zip_path, 'expanded': expanded,
             })
         except Exception as e:
             msg = f"{test_name}: {e}"
@@ -1554,7 +1662,10 @@ def write_report(stats: dict, report_path: str):
         for item in tts.get('ok', []):
             zip_name = os.path.basename(item.get('zip', ''))
             zip_part = f"  zip {zip_name}" if zip_name else ""
-            lines.append(f"    · {item['name']}  wav {item['wav']}/{item['selected']}  {item['locale']}{zip_part}")
+            exp = item.get('expanded', 0)
+            exp_part = f"  (句式扩展 +{exp})" if exp else ""
+            lines.append(f"    · {item['name']}  wav {item['wav']}/{item['selected']}"
+                         f"  {item['locale']}{exp_part}{zip_part}")
         for item in tts.get('skipped', []):
             lines.append(f"    · 跳过: {item}")
         for item in tts.get('failed', []):
