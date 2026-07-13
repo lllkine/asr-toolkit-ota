@@ -678,7 +678,8 @@ class GUI(QWidget):
         _iconize(b_list, 0xE721)                              # 搜索
         b_dl = QPushButton("下载到本机"); b_dl.clicked.connect(lambda: self.do_engine("local"))
         _iconize(b_dl, 0xE896)                                # 下载
-        b_rdg = QPushButton("传rdg"); b_rdg.clicked.connect(lambda: self.do_engine("rdg"))
+        b_rdg = QPushButton("下载并传内网"); b_rdg.clicked.connect(lambda: self.do_engine("send"))
+        b_rdg.setToolTip("登录E3 → 下载引擎zip → 传到 rdg 和 dtn（下载时请勿关闭浏览器）")
         _iconize(b_rdg, 0xE898)                               # 上传
         for w in (lbl1, self.eng_lang, lbl2, self.eng_brand, b_list, b_dl, b_rdg):
             row.addWidget(w)
@@ -1004,8 +1005,16 @@ class GUI(QWidget):
             self.run(base + ["list"] + args)
         elif action == "local":
             self.run(base + ["get"] + args + ["--local"])
-        elif action == "rdg":
-            self.run(base + ["get"] + args + ["--to", "rdg"])
+        elif action == "send":
+            # 会弹浏览器登录 E3 并下载上百 MB 的包，先把"别关窗口"讲清楚
+            if QMessageBox.question(
+                    self, "下载并传内网",
+                    "将执行：登录 E3 → 下载引擎 zip（上百 MB，几分钟）→ 传到 rdg 和 dtn。\n\n"
+                    "★ 浏览器弹出后请一直开着，等日志出现「全部完成」再关闭；\n"
+                    "   中途关窗口会导致下载中断（E3 登录票据是会话级的）。\n\n"
+                    "现在开始？") != QMessageBox.Yes:
+                return
+            self.run(base + ["get"] + args + ["--to", "rdg,dtn"])
 
     def do_mail(self, dry):
         lang = self.eng_lang.text().strip()

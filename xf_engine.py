@@ -180,18 +180,40 @@ def login_devops() -> int:
 
 # ══════════════════ 读表（剪贴板法）══════════════════
 
+def _active_tab(page) -> str:
+    """当前选中的 tab 名（读 active/selected 类名或 aria-selected）。读不出返回 ''。"""
+    try:
+        return page.evaluate("""() => {
+            const els = Array.from(document.querySelectorAll(
+                '[class*="tab"],[role="tab"],[class*="sheet"]'));
+            const a = els.find(e =>
+                e.getAttribute('aria-selected') === 'true' ||
+                /active|selected|current/i.test(e.className || ''));
+            return a ? (a.textContent || '').trim() : '';
+        }""") or ""
+    except Exception:
+        return ""
+
+
 def _resolve_tab(page, tab_name: str) -> bool:
-    """点击底部/顶部 tab 名切换。"""
+    """切到指定 tab。三次重试：页面渲染有快有慢，一次点不中很常见；
+    而且本来就停在目标 tab 上时（默认 tab 就是它）根本不需要点。"""
     if not tab_name:
         return True
-    try:
-        el = page.get_by_text(tab_name, exact=True).first
-        el.click(timeout=6000)
-        page.wait_for_timeout(4000)
-        return True
-    except Exception:
-        print(f"[warn] 未找到 tab「{tab_name}」，用当前 tab。", flush=True)
-        return False
+    for attempt in range(3):
+        cur = _active_tab(page)
+        if cur and tab_name in cur:          # 已经在目标 tab 上，不用点
+            return True
+        try:
+            page.get_by_text(tab_name, exact=True).first.click(timeout=6000)
+            page.wait_for_timeout(4000)
+            return True
+        except Exception:
+            if attempt < 2:
+                page.wait_for_timeout(3000)  # 多半是还没渲染出来，等一会儿再试
+    print(f"[warn] 未找到 tab「{tab_name}」（已重试 3 次），当前 tab：{_active_tab(page) or '未知'}",
+          flush=True)
+    return False
 
 
 def fetch_sheet(tab: str = "", auto_login: bool = True) -> list:
@@ -404,6 +426,70 @@ def repo_path_of(url: str) -> str:
     return m.group(1) if m else ""
 
 
+def _engine_dir_of(rec: dict) -> str:
+    """引擎 zip 的本地落地目录（与 _download_rec_on_page 的命名保持一致）。"""
+    sub = re.sub(r'[:*?"<>|]', "_", f"{rec['归属']}{rec['语种']}_{rec['上架时间']}")
+    return os.path.join(ENGINES_DIR, sub)
+
+
+def _zips_in(d: str) -> list:
+    if not os.path.isdir(d):
+        return []
+    return [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith('.zip')]
+
+
+def send_local_engine(rec: dict, networks: str) -> int:
+    """下载引擎 zip 到本机，再用 rftctl『local submit』把文件发到各网段。
+
+    不用 warehouse submit：那条路是让服务端自己从制品库转运，一直 502，指望不上。
+    先下到本地再传文件，链路上少一个坏掉的服务。"""
+    rft = _find_rftctl()
+    if not rft:
+        print("✗ 未找到 rftctl。", flush=True)
+        return 1
+
+    dest = _engine_dir_of(rec)
+    zips = _zips_in(dest)
+    if zips:
+        print(f"已有本地引擎包，跳过下载：{dest}", flush=True)
+    else:
+        print("本地还没有这个引擎包，先下载（会弹浏览器登录 E3）…", flush=True)
+        if login_and_download([rec]) != 0:
+            print("✗ 引擎下载失败，无法传输。", flush=True)
+            return 1
+        zips = _zips_in(dest)
+    if not zips:
+        print(f"✗ {dest} 里没有 zip，无法传输。", flush=True)
+        return 1
+
+    nets = [n.strip() for n in str(networks).split(',') if n.strip()]
+    title = f"引擎传输_{rec['归属']}{rec['语种']}_{rec['上架时间'].replace('.', '')}"
+    remark = f"{rec['上架时间']}引擎传输{rec['归属']}{rec['语种']}"
+    print(f"传输 {len(zips)} 个文件到 {nets}：{', '.join(os.path.basename(z) for z in zips)}",
+          flush=True)
+
+    failed = []
+    for net in nets:
+        cmd = [rft, "local", "submit", "--receive", net,
+               "--file", dest, "--remark", remark, "--title", title]
+        print(f"  -> [{net}] 提交中… {' '.join(cmd)}", flush=True)
+        r = subprocess.run(cmd, text=True, encoding="utf-8", errors="replace",
+                           capture_output=True)
+        detail = ((r.stdout or '') + (r.stderr or '')).strip()
+        if detail:
+            print(f"     rftctl: {detail}", flush=True)
+        if r.returncode == 0:
+            print(f"  ✓ [{net}] 传输完成。", flush=True)
+        else:
+            failed.append(net)
+            print(f"  ✗ [{net}] 传输失败（exit {r.returncode}）。", flush=True)
+    if failed:
+        print(f"✗ 失败网段：{failed}。本地包仍在 {dest}，可稍后重试。", flush=True)
+        return 1
+    print(f"✓ 全部网段传输完成：{nets}", flush=True)
+    return 0
+
+
 def send_to_network(rec: dict, network: str) -> int:
     rft = _find_rftctl()
     if not rft:
@@ -595,8 +681,14 @@ def login_and_download(picked: list) -> int:
         print("✗ 没有待下载的引擎清单。", flush=True)
         return 1
     print(f"待下载 {len(picked)} 个引擎。", flush=True)
-    print("正在打开浏览器…请登录 E3 平台（集团账号/扫码）。登录成功后会【自动开始下载】，"
-          "全程请勿关闭窗口。", flush=True)
+    print("", flush=True)
+    print("┌────────────────────────────────────────────────────────────┐", flush=True)
+    print("│  即将打开浏览器，请登录 E3 平台（集团账号 / 扫码）。          │", flush=True)
+    print("│  登录成功后会【自动开始下载】，引擎包上百 MB，需要几分钟。    │", flush=True)
+    print("│  ★ 请一直开着浏览器，等日志出现「全部完成」再关！             │", flush=True)
+    print("│    E3 的登录票据是会话级的，中途关掉窗口下载会直接中断。      │", flush=True)
+    print("└────────────────────────────────────────────────────────────┘", flush=True)
+    print("", flush=True)
     total_files = 0
     ok_engines = 0
     with sync_playwright() as p:
@@ -651,8 +743,11 @@ def main():
     ap.add_argument("--tab", default=DEFAULT_TAB)
     ap.add_argument("--lang", default="")
     ap.add_argument("--brand", default="")
-    ap.add_argument("--to", default="", choices=["", "rdg", "dtn"])
-    ap.add_argument("--local", action="store_true")
+    # --to 接受逗号分隔的多个网段（如 rdg,dtn）：默认走「下载 zip 再 local submit」
+    ap.add_argument("--to", default="", help="接收网段，逗号分隔，如 rdg 或 rdg,dtn")
+    ap.add_argument("--local", action="store_true", help="只下载到本机，不传输")
+    ap.add_argument("--warehouse", action="store_true",
+                    help="老路：让服务端从制品库直接转运（warehouse submit，常年 502）")
     args = ap.parse_args()
 
     if args.cmd == "login":
@@ -725,8 +820,12 @@ def main():
 
     code = 0
     if args.to:
-        code = send_to_network(rec, args.to) or code
-    if args.local:
+        if args.warehouse:
+            code = send_to_network(rec, args.to) or code       # 老路：服务端转运（常年 502）
+        else:
+            # 默认：先把 zip 下到本机，再用 local submit 传文件
+            code = send_local_engine(rec, args.to) or code
+    elif args.local:
         # 用「登录即下载」活会话流程：E3 的 SSO 票据是会话级的，
         # 关浏览器就失效，必须在同一活浏览器里登录后立即下载。
         code = login_and_download([rec]) or code
