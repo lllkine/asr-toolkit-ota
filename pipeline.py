@@ -43,21 +43,45 @@ INTERNAL_DIRS   = {INBOX_DIR, BACKUPS_DIR, OUTPUTS_DIR, REPORTS_DIR,
 # 打包/构建产物目录：不是语料，扫描时一律跳过
 BUILD_ARTIFACT_DIRS     = {'dist', 'build'}
 BUILD_ARTIFACT_PREFIXES = ('asr_pipeline_',)
-def _resolve_tts_tools_dir():
-    """定位 TTS 工具目录：环境变量 > 程序目录/tts_tools（打包/OTA 后在这）> D:\\tts_tools（开发机兜底）。"""
-    v = os.environ.get('TTS_TOOLS_DIR', '').strip()
-    if v:
-        return v
+def _tts_dir_candidates():
+    """TTS 工具目录候选，按优先级：打包版真身 > 程序目录 > cwd > 开发机兜底。"""
     try:
         base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) \
             else os.path.dirname(os.path.abspath(__file__))
     except Exception:
         base = os.getcwd()
-    for cand in (os.path.join(base, 'tts_tools'),
-                 os.path.join(os.getcwd(), 'tts_tools'),
-                 r'D:\tts_tools'):
-        if os.path.isfile(os.path.join(cand, 'asr_tts_tool.py')):
-            return cand
+    cands = []
+    mei = getattr(sys, '_MEIPASS', '')
+    if mei:                                   # 打包版：随 exe 一起发出去的那份
+        cands.append(os.path.join(mei, 'runtime', 'tts_tools'))
+    cands += [os.path.join(base, '_internal', 'runtime', 'tts_tools'),
+              os.path.join(base, 'tts_tools'),
+              os.path.join(os.getcwd(), 'tts_tools'),
+              r'D:\tts_tools']
+    return cands
+
+
+def _tts_dir_complete(d):
+    """脚本和音色表都在才算数（少一个，合成必哑火）。"""
+    return (os.path.isfile(os.path.join(d, 'asr_tts_tool.py')) and
+            os.path.isfile(os.path.join(d, 'all_voices.json')))
+
+
+def _resolve_tts_tools_dir():
+    """定位 TTS 工具目录：环境变量 > 候选里第一个「完整」的。
+    必须同时有 asr_tts_tool.py 和 all_voices.json —— 只有脚本、没音色表的残缺目录
+    （OTA 只更新脚本时会造出这么一个）会让 LANG_CONFIG 空掉、合成整段静默跳过，
+    所以残缺目录一律不认，继续往后找。"""
+    v = os.environ.get('TTS_TOOLS_DIR', '').strip()
+    if v:
+        return v
+    cands = _tts_dir_candidates()
+    for c in cands:
+        if _tts_dir_complete(c):
+            return c
+    for c in cands:      # 全都残缺：挑第一个有脚本的，让 step4 把缺什么明确报出来
+        if os.path.isfile(os.path.join(c, 'asr_tts_tool.py')):
+            return c
     return r'D:\tts_tools'
 
 
@@ -946,14 +970,21 @@ def step4_synthesize_incremental(incremental_dir: str, skip_dedup: bool = False)
 
     tool = os.path.join(TTS_TOOLS_DIR, 'asr_tts_tool.py')
     if not os.path.exists(tool):
-        print(f"  [step4] 未找到 TTS 工具：{tool}，跳过自动合成。")
-        result['skipped'].append(f"missing tool: {tool}")
+        msg = f"未找到 TTS 工具：{tool}"
+        print(f"  [step4] ✗ {msg} —— 本次不会有测试集！")
+        result['failed'].append(msg)
         return result
 
     tts_config = _load_tts_config()
     if not tts_config:
-        print("  [step4] TTS 语言配置为空，跳过自动合成。")
-        result['skipped'].append("empty tts config")
+        # 静默跳过是老 bug 的温床：合成整段没跑，报告却只写"未执行自动合成"。这里必须吵。
+        miss = [f for f in ('asr_tts_tool.py', 'all_voices.json')
+                if not os.path.exists(os.path.join(TTS_TOOLS_DIR, f))]
+        msg = (f"TTS 音色表没读到（TTS 目录：{TTS_TOOLS_DIR}"
+               + (f"，缺 {'、'.join(miss)}" if miss else "，LANG_CONFIG 为空") + "）")
+        print(f"  [step4] ✗ {msg} —— 本次不会有测试集！")
+        print(f"  [step4]   找过这些位置：{ '; '.join(_tts_dir_candidates()) }")
+        result['failed'].append(msg)
         return result
 
     # 测试集输出到 corpus 的 _outputs/测试集/（绝对路径：合成子进程 cwd 在 tts_tools）
@@ -1528,8 +1559,14 @@ def write_report(stats: dict, report_path: str):
             lines.append(f"    · 跳过: {item}")
         for item in tts.get('failed', []):
             lines.append(f"    · 失败: {item}")
+    elif tts.get('failed'):
+        # 合成没跑起来（环境缺东西）——报告里必须写清楚，否则用户只看到"未执行"，
+        # 会以为是本来就不用合成
+        lines.append("  ✗ 合成未能执行，本次没有测试集：")
+        for item in tts['failed']:
+            lines.append(f"    · {item}")
     else:
-        lines.append("  未执行自动合成")
+        lines.append("  未执行自动合成（--no-tts 或本批无新增）")
 
     lines.append(f"\n── Step 5 打包 {'─'*(W-12)}")
     s3 = stats.get('step3', {})

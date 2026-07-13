@@ -97,6 +97,36 @@ UPDATE_FILES = ["pipeline.py", "web_download.py", "qq_schedule.py",
                 os.path.join("tts_tools", "asr_tts_tool.py")]
 
 
+def _tts_tools_dir() -> str:
+    """和 pipeline 一致地定位 TTS 工具目录：脚本 + 音色表齐全才算数。找不到返回空。"""
+    v = os.environ.get("TTS_TOOLS_DIR", "").strip()
+    if v:
+        return v
+    cands = []
+    mei = getattr(sys, "_MEIPASS", "")
+    if mei:
+        cands.append(os.path.join(mei, "runtime", "tts_tools"))
+    cands += [os.path.join(APP, "_internal", "runtime", "tts_tools"),
+              os.path.join(APP, "tts_tools"),
+              r"D:\tts_tools"]
+    for c in cands:
+        if (os.path.isfile(os.path.join(c, "asr_tts_tool.py")) and
+                os.path.isfile(os.path.join(c, "all_voices.json"))):
+            return c
+    return ""
+
+
+def _update_dest(rel: str) -> str:
+    """更新文件的落地位置。TTS 脚本必须写进「真正在用的」TTS 目录：
+    直接写 APP/tts_tools 会造出一个只有脚本、没 all_voices.json 的残缺目录，
+    它会被优先选中导致音色表读不到，合成整段静默失效。"""
+    if rel.replace("\\", "/") == "tts_tools/asr_tts_tool.py":
+        d = _tts_tools_dir()
+        if d:
+            return os.path.join(d, "asr_tts_tool.py")
+    return os.path.join(APP, rel)
+
+
 def _update_source() -> str:
     """更新源：环境变量 ASR_UPDATE_SOURCE > 程序目录 update_source.txt。"""
     src = os.environ.get("ASR_UPDATE_SOURCE", "").strip()
@@ -1138,7 +1168,7 @@ class GUI(QWidget):
             for rel in UPDATE_FILES:
                 s = os.path.join(updir, rel)
                 if os.path.exists(s):
-                    d = os.path.join(APP, rel)
+                    d = _update_dest(rel)
                     os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
                     shutil.copy2(s, d); n += 1
                     self.append(f"[更新] {rel}\n")
