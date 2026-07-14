@@ -353,6 +353,21 @@ def _sheet_is_meta(ws) -> bool:
     txt = ' '.join(vals)
     return sum(1 for kw in _META_SIGNALS if kw in txt) >= 2
 
+_BAD_SHEET_CHARS = re.compile(r'[\[\]:*?/\\]')
+
+
+def _safe_sheet_name(s: str) -> str:
+    """Excel 的 sheet 名不能含 [ ] : * ? / \\ —— 直接拿文件名当 sheet 名时，
+    像 re-[Chery-SA]xxx.xlsx 这种带方括号的会让 openpyxl 抛异常，
+    整个标准化直接失败、一条语料都整理不出来。"""
+    return _BAD_SHEET_CHARS.sub('_', str(s or '')).strip() or 'sheet'
+
+
+def _sheet_name(prefix: str, suffix: str) -> str:
+    """拼 sheet 名，保证 31 字符上限下后缀（_sent/_shuofa）一定保得住。"""
+    return (prefix[:31 - len(suffix)] + suffix)
+
+
 def _find_sent_col(ws):
     """
     在前 6 行内找逆规整目标列，返回 1-based 列号；未找到返回 None。
@@ -446,15 +461,21 @@ def _build_mapping():
         lang_dir  = _cell_str(row.iloc[2])          # 空单元格→''，不再变成 'nan'
         mapping.append((core_id, task_lang, brand, lang_dir, task_id))
 
-    # 同一母任务编号(core)的车厂一致（与语种无关）：某行车厂空/不可靠时，
-    # 从同编号有可靠车厂的行继承，避免"英语行没填车厂"这类导致误进待确认。
-    brand_by_core = {}
-    for core, _tl, br, _ld, _ti in mapping:
+    # 车厂回填：某行车厂空/不可靠时，从【同单号 + 同语种】的其他行继承。
+    #
+    # 原来是"同单号即可，与语种无关"——这个前提是错的：排期里有 40+ 个单号被多个车厂
+    # 共用（如 5944：俄语=长安、越南语=吉利、西语=阿维塔、英语=宝腾），跨语种抄车厂
+    # 会把语料悄悄归档到错误的车厂目录下，没有任何报错。
+    # 同 单号+语种 仍有分歧时（本地单/云端单归属不同车厂也真实存在）就不猜，
+    # 让它进 待确认/，由人来定——猜错比不猜更糟。
+    cand = {}
+    for core, tl, br, _ld, _ti in mapping:
         if _is_reliable_brand(br):
-            brand_by_core.setdefault(core, br)
+            cand.setdefault((core, tl), set()).add(br)
+    brand_by_key = {k: next(iter(v)) for k, v in cand.items() if len(v) == 1}
     mapping = [
-        e if (_is_reliable_brand(e[2]) or e[0] not in brand_by_core)
-        else (e[0], e[1], brand_by_core[e[0]], e[3], e[4])
+        e if (_is_reliable_brand(e[2]) or (e[0], e[1]) not in brand_by_key)
+        else (e[0], e[1], brand_by_key[(e[0], e[1])], e[3], e[4])
         for e in mapping
     ]
     return mapping
@@ -653,9 +674,11 @@ def _parse_keep(argv: list, default: int = KEEP_RECENT) -> int:
 
 def process_excel(path: str) -> bool:
     name_no_ext = os.path.splitext(os.path.basename(path))[0]
-    prefix      = re.sub(TIMESTAMP_REGEX, '', name_no_ext)
-    sent_name   = f"{prefix}_sent"[:31]
-    shuofa_name = f"{prefix}_shuofa"[:31]
+    prefix      = _safe_sheet_name(re.sub(TIMESTAMP_REGEX, '', name_no_ext))
+    # 先截前缀再拼后缀：原来是拼完再 [:31]，文件名一长就把 `_sent` 后缀整个切掉，
+    # 而下游全靠「以 _sent 结尾」找表 —— 表还在，却永远认不出来，合成/核验静默全废。
+    sent_name   = _sheet_name(prefix, '_sent')
+    shuofa_name = _sheet_name(prefix, '_shuofa')
     try:
         wb     = load_workbook(path)
         sheets = wb.sheetnames
