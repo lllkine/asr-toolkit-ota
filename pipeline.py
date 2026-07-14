@@ -15,6 +15,7 @@ ASR 语料整理流水线
   --receive <网段[,网段...]>          接收网段，逗号分隔可多发（默认 rdg,dtn；或环境变量 RFT_RECEIVE）
   --keep N                            各类产物保留份数（默认 5）
   --no-tts                            跳过 TTS 测试集合成（Step 4）
+  --no-sync                           跳过"从腾讯文档刷新排期"（Step 0），只用本地排期缓存
 """
 import os, re, sys, shutil, zipfile, subprocess, random, glob, time
 from datetime import datetime
@@ -1918,6 +1919,35 @@ def restore_from_backup(backup_dir: str = None):
     step4_verify(mapping)
 
 
+def _auto_sync_schedule() -> bool:
+    """处理前从腾讯文档刷新排期（文档=权威，本地 xlsx=缓存）。
+    失败不中断：网络/登录挂了还能用缓存继续跑，但必须把话说明白。"""
+    print("\n=== Step 0: 刷新排期（以腾讯文档为准）===")
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = next((p for p in (os.path.join(here, 'qq_schedule.py'),
+                               os.path.join(os.getcwd(), 'qq_schedule.py'))
+                   if os.path.exists(p)), '')
+    if not script:
+        print("  [step0] 找不到 qq_schedule.py，跳过刷新，使用本地排期缓存。")
+        return False
+    try:
+        r = subprocess.run([sys.executable, script, 'sync'],
+                           text=True, encoding='utf-8', errors='replace',
+                           capture_output=True, timeout=600)
+        out = ((r.stdout or '') + (r.stderr or '')).strip()
+        for line in out.splitlines():
+            if line.strip():
+                print("  " + line.strip())
+        if r.returncode == 0:
+            return True
+        print("  [step0] ✗ 刷新失败（见上），本次用本地排期缓存继续 —— "
+              "若车厂/语种不对，请先修好排期再重跑。")
+        return False
+    except Exception as e:
+        print(f"  [step0] ✗ 刷新异常：{e}，本次用本地排期缓存继续。")
+        return False
+
+
 # ══════════════════════════════════════════════════════
 # 主入口
 # ══════════════════════════════════════════════════════
@@ -1968,6 +1998,11 @@ if __name__ == "__main__":
 
     # ── 初始化 _inbox/ ──────────────────────────────
     os.makedirs(INBOX_DIR, exist_ok=True)
+
+    # 处理前先以腾讯文档为准刷新排期：本地 排期.xlsx 只当缓存。
+    # 车厂/语种全靠排期，排期一旧，语料就归错车厂、筛选也筛不出来。
+    if '--no-sync' not in sys.argv:
+        _auto_sync_schedule()
 
     source_files = _collect_source_files()
     source_dir   = INBOX_DIR if source_files and source_files[0][0] == INBOX_DIR else '根目录'

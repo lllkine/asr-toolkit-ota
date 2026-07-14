@@ -156,11 +156,48 @@ def _cells_from_blob(b64: str) -> list:
 
 # ══════════════════════ 抓取 ══════════════════════
 
+def _copy_tsv(page) -> list:
+    """在表格页上 全选+复制 → TSV 行（保留列结构）。
+
+    截获接口拿到的是拍平的字符串流，行列坐标全丢了，只能靠"猜哪个词是车厂"，
+    一遇到合并单元格就会把上一行的车厂串下来（5850 西语明明是吉利，被读成阿维塔）。
+    剪贴板复制出来的是带 \\t 的真表格，列对得上，合并单元格在本列内向下填充即可。"""
+    import csv as _csv
+    import io as _io
+    txt, last = "", -1
+    for _round in range(6):
+        page.mouse.click(700, 400)
+        page.wait_for_timeout(400)
+        page.keyboard.press("Control+A")
+        page.wait_for_timeout(500)
+        page.keyboard.press("Control+C")
+        page.wait_for_timeout(2500)
+        try:
+            txt = page.evaluate("navigator.clipboard.readText()") or ""
+        except Exception as e:
+            print(f"  [warn] 剪贴板读取失败：{e}", flush=True)
+            return []
+        n = len(txt.splitlines())
+        if n <= last:                    # 行数不再增长 = 已到底（表格是懒加载的）
+            break
+        last = n
+        for _ in range(12):              # 滚到底，触发后续行加载
+            page.keyboard.press("Control+End")
+            page.wait_for_timeout(400)
+            page.mouse.wheel(0, 20000)
+            page.wait_for_timeout(250)
+        page.wait_for_timeout(1500)
+    if not txt:
+        return []
+    return list(_csv.reader(_io.StringIO(txt), delimiter="\t"))
+
+
 def fetch_doc(url: str, tab: str = "") -> dict:
-    """加载表格页面，截获数据接口。返回 {tabs:[(id,name,hidden)], cells:[str]}"""
+    """加载表格页面，截获数据接口 + 复制出 TSV。
+    返回 {tabs:[(id,name,hidden)], cells:[str], tsv:[[str]]}"""
     from playwright.sync_api import sync_playwright
     base = url.split("?")[0]
-    result = {"tabs": [], "cells": []}
+    result = {"tabs": [], "cells": [], "tsv": []}
     payloads = {"opendoc": [], "getsheet": []}
 
     def crawl(page, target_url):
@@ -182,7 +219,8 @@ def fetch_doc(url: str, tab: str = "") -> dict:
 
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
-        ctx = b.new_context(viewport={"width": 1400, "height": 900})
+        ctx = b.new_context(viewport={"width": 1600, "height": 1000},
+                            permissions=["clipboard-read", "clipboard-write"])
         page = ctx.new_page()
         crawl(page, base + (f"?tab={tab}" if tab else ""))
 
@@ -215,6 +253,7 @@ def fetch_doc(url: str, tab: str = "") -> dict:
 
         # tab 用名字给的 → 解析到 id 后重新加载
         want = tab
+        cur_page = page
         if tab and tab_list and not any(t[0] == tab for t in tab_list):
             hit = next((t for t in tab_list if tab in t[1]), None)
             if hit:
@@ -222,6 +261,10 @@ def fetch_doc(url: str, tab: str = "") -> dict:
                 payloads["getsheet"].clear()
                 page2 = ctx.new_page()
                 crawl(page2, base + f"?tab={want}")
+                cur_page = page2
+
+        # 主路径：直接从表格复制 TSV（保列结构）。截获接口那套只作兜底。
+        result["tsv"] = _copy_tsv(cur_page)
 
         # 取数据：解析全部候选数据块，选“单号锚点最多”的那份
         candidates = []   # (是否目标tab, cells)
@@ -267,6 +310,73 @@ def fetch_doc(url: str, tab: str = "") -> dict:
 # ══════════════════════ 行还原 ══════════════════════
 
 _SHORT_CN = re.compile(r'^[一-龥A-Za-z]{2,6}$')
+
+
+_COL_ALIASES = {
+    "单号": ["单号", "母任务", "任务单号"],
+    "需求名称": ["需求名称", "需求名", "名称"],
+    "车厂": ["车厂", "厂商", "客户"],
+    "语种": ["语种", "语言"],
+    "云端or本地": ["云端or本地", "云端/本地", "本地or云端"],
+    "预计完成时间": ["预计完成时间", "预计完成", "完成时间", "交付时间"],
+    "当前状态": ["当前状态", "状态"],
+    "责任人": ["责任人", "负责人"],
+    "备注": ["备注", "说明"],
+}
+
+
+def parse_tsv_rows(tsv: list) -> list:
+    """按表头定位列来解析（正路）。合并单元格只在【本列】内向下填充，
+    不会像旧的扁平流解析那样把上一行的车厂串到别人头上。"""
+    if not tsv:
+        return []
+    # 找表头行：含"单号/母任务"且含"车厂"的那一行
+    hi = -1
+    for i, r in enumerate(tsv[:10]):
+        cells = [str(c or "").strip() for c in r]
+        if any(c in _COL_ALIASES["单号"] for c in cells) and \
+           any(c in _COL_ALIASES["车厂"] for c in cells):
+            hi = i
+            break
+    if hi < 0:
+        return []
+    head = [str(c or "").strip() for c in tsv[hi]]
+    idx = {}
+    for key, names in _COL_ALIASES.items():
+        for j, h in enumerate(head):
+            if h in names:
+                idx[key] = j
+                break
+    if "单号" not in idx:
+        return []
+
+    rows, prev = [], {}
+    for r in tsv[hi + 1:]:
+        seq = str(r[idx["单号"]] or "").strip() if idx["单号"] < len(r) else ""
+        if not SEQ_RE.match(seq):
+            continue
+        rec = {"单号": seq}
+        for key in ("需求名称", "车厂", "语种", "云端or本地",
+                    "预计完成时间", "当前状态", "责任人", "备注"):
+            j = idx.get(key, -1)
+            v = str(r[j]).strip() if 0 <= j < len(r) and r[j] is not None else ""
+            if not v and key in ("车厂", "语种", "预计完成时间", "当前状态", "责任人"):
+                v = prev.get(key, "")        # 合并单元格：本列向下填充
+            rec[key] = v
+        prev = {k: rec[k] for k in ("车厂", "语种", "预计完成时间", "当前状态", "责任人")}
+        rows.append(rec)
+    return rows
+
+
+def _rows_of(doc: dict) -> list:
+    """优先用剪贴板 TSV（按表头读列，车厂不会串行）；拿不到再退回旧的扁平流猜测解析。"""
+    rows = parse_tsv_rows(doc.get("tsv") or [])
+    if rows:
+        print(f"  [读表] 按列解析：{len(rows)} 行", flush=True)
+        return rows
+    print("  [读表] 复制不到表格内容，退回旧的文本流解析"
+          "（车厂可能不准，建议重试）", flush=True)
+    return parse_rows(doc.get("cells") or [])
 
 
 def parse_rows(cells: list) -> list:
@@ -524,7 +634,7 @@ def main():
         tname = next((n for i, n, _h in doc["tabs"] if i == tab), tab)
         print(f"从文档刷新排期：tab = {tname}", flush=True)
         sdoc = fetch_doc(args.url, tab)
-        srows = parse_rows(sdoc["cells"])
+        srows = _rows_of(sdoc)
         if not srows:
             print("✗ 该 tab 没解析到排期行。", flush=True)
             return 1
@@ -540,7 +650,7 @@ def main():
             print(f"✗ 写排期失败：{e}", flush=True)
             return 1
 
-    rows = parse_rows(doc["cells"])
+    rows = _rows_of(doc)
     if not rows:
         print("✗ 没解析到任何行（tab 可能不是排期格式，或文档无法访问）", flush=True)
         return 1
