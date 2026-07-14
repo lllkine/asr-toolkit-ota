@@ -558,7 +558,11 @@ def main():
     if args.user:
         rows = [r for r in rows if args.user in r["责任人"] or args.user in r["备注"]]
     if args.lang:
-        rows = [r for r in rows if _fz(args.lang, r["语种"], r["单号"])]
+        # 别名集合：填"西语"要能命中"西班牙语"（纯子串匹配会漏）
+        from web_download import _lang_aliases
+        _al = _lang_aliases(args.lang)
+        rows = [r for r in rows
+                if any(_fz(a, r["语种"], r["单号"]) for a in _al)]
     if args.brand:
         rows = [r for r in rows if _fz(args.brand, r["车厂"])]
     if args.scope == "local":

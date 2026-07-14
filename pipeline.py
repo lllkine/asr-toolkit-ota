@@ -288,6 +288,47 @@ LANG_CN = {
     'id_id': '印尼语', 'ms_my': '马来语',
 }
 
+# 同一语种的各种叫法（简称/全称/语言码）。筛选时纯做子串匹配会漏：
+# "西语" 不是 "西班牙语" 的子串（中间隔着"班牙"），"葡语"/"葡萄牙语"、"阿语"/"阿拉伯语" 同理。
+LANG_ALIAS_GROUPS = [
+    {'西语', '西班牙语', 'es', 'es_la', 'es_es'},
+    {'葡语', '葡萄牙语', 'pt', 'pt_la', 'pt_pt'},
+    {'阿语', '阿拉伯语', 'ar', 'ar_il'},
+    {'英语', '英文', 'en', 'en_uk', 'en_au', 'en_ml', 'en_us'},
+    {'法语', 'fr', 'fr_fr'},
+    {'德语', 'de'},
+    {'泰语', 'th', 'th_th'},
+    {'俄语', 'ru'},
+    {'意大利语', 'it', 'it_it'},
+    {'波兰语', 'pl', 'pl_pl'},
+    {'荷兰语', 'nl', 'nl_nl'},
+    {'挪威语', 'nb', 'nb_no'},
+    {'瑞典语', 'sv', 'sv_se'},
+    {'丹麦语', 'da', 'da_dk'},
+    {'希伯来语', '希语', 'he', 'he_il'},
+    {'匈牙利语', 'hu'},
+    {'斯洛文尼亚语', 'si', 'si_si', 'sl'},
+    {'印尼语', 'id', 'id_id'},
+    {'马来语', 'ms', 'ms_my'},
+    {'日语', 'ja', 'ja_jp'},
+    {'韩语', 'ko', 'ko_kr'},
+    {'越南语', 'vi', 'vi_vn'},
+    {'土耳其语', 'tr', 'tr_tr'},
+    {'波斯语', 'fa', 'fa_ir'},
+    {'印地语', 'hi', 'hi_in'},
+]
+
+
+def _lang_aliases(v) -> set:
+    """给一个语种叫法，返回它的全部等价叫法（含自身）。认不出就只有它自己。"""
+    s = str(v or '').strip().lower().replace(' ', '')
+    if not s:
+        return set()
+    for g in LANG_ALIAS_GROUPS:
+        if s in g:
+            return set(g)
+    return {s}
+
 
 # ══════════════════════════════════════════════════════
 # 内部工具
@@ -1931,8 +1972,10 @@ if __name__ == "__main__":
 
         def _match_flt(sf):
             b, l = _flt_fields(sf)
-            # 语种：排期目录名 / 文件名代码 / 文件名代码反查的中文名（en→英语）都参与匹配
-            if _flt_lang and not _fz(_flt_lang, l, sf[1], _lang_cn_of(sf[1])):
+            # 语种：排期目录名 / 文件名代码 / 文件名代码反查的中文名（en→英语）都参与匹配。
+            # 用别名集合而不是单个词：填"西语"要能命中排期里的"西班牙语"。
+            if _flt_lang and not any(_fz(a, l, sf[1], _lang_cn_of(sf[1]))
+                                     for a in _lang_aliases(_flt_lang)):
                 return False
             # 车厂：只能靠排期（文件名里没有车厂信息）
             if _flt_brand and not _fz(_flt_brand, b):

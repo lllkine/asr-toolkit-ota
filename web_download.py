@@ -92,6 +92,17 @@ def _lang_cn(seq_no: str) -> str:
     return LANG_CN.get(m.group(1).lower(), '')
 
 
+def _lang_aliases(v) -> set:
+    """语种别名集合（西语↔西班牙语↔es_la）。表在 pipeline 里，这边只借用，不复制——
+    复制一份迟早两边改不同步，那正是我们一路在修的『副本分叉』。"""
+    try:
+        from pipeline import _lang_aliases as _pa
+        return _pa(v)
+    except Exception:
+        s = str(v or '').strip().lower().replace(' ', '')
+        return {s} if s else set()
+
+
 def _brand_of(item: dict) -> str:
     """从搜索项里取车厂：companyName 优先，其次项目名前段。"""
     v = item.get('companyName')
@@ -334,10 +345,13 @@ def download(base: str = RMP_BASE, scope: str = "all",
             n = str(needle).lower().replace(" ", "")
             return any(n in str(f or "").lower().replace(" ", "") for f in fields)
         if lang:
-            # 语种可用 中文名 / 单号(-ASR-代码) / languageName 任意片段匹配
+            # 语种可用 中文名 / 单号(-ASR-代码) / languageName 任意片段匹配。
+            # 走别名集合：填"西语"要能命中"西班牙语"（纯子串匹配会漏）。
+            _aliases = _lang_aliases(lang)
             items = [it for it in items
-                     if _fz(lang, _lang_cn(str(it.get("seqNo", ""))),
-                            it.get("languageName"), it.get("seqNo"))]
+                     if any(_fz(a, _lang_cn(str(it.get("seqNo", ""))),
+                                it.get("languageName"), it.get("seqNo"))
+                            for a in _aliases)]
         if brand:
             items = [it for it in items if _fz(brand, _brand_of(it))]
         scope_cn = {"local": "只本地", "cloud": "只云端"}.get(scope, "全部")
